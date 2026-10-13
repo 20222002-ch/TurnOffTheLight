@@ -1,0 +1,70 @@
+{
+  "provenance": "Original procedural synthesis and composition generated specifically for LightsOut; no external audio samples or copyrighted melodies used.",
+  "loop": "NightOfficeLoop.wav, 24-second seamless cyclic arrangement, 80 BPM, 8 bars.",
+  "assets": [
+    {
+      "file": "01_SwitchClick.wav",
+      "durationSeconds": 0.14,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.46,
+      "rms": 0.05527789927611313,
+      "sha256": "15cc4c8d335ddb67b618e176b5233ce735c08a493e1051069f76a86f587d951f"
+    },
+    {
+      "file": "02_LightOff.wav",
+      "durationSeconds": 0.33,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.34,
+      "rms": 0.06499195633233078,
+      "sha256": "4bf8f9f1b5f01ba72c5c9d59bcf8a36f3f3e493992c1fcaad8dfb3f5e099d400"
+    },
+    {
+      "file": "03_GoldenReward.wav",
+      "durationSeconds": 1.1,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.45999999999999996,
+      "rms": 0.12109879336148256,
+      "sha256": "0b6f4a71fb0afe66f786d42abdf30fba73a5cbee0c1718cac48cf51f61061d6a"
+    },
+    {
+      "file": "04_Upgrade.wav",
+      "durationSeconds": 0.9,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.43,
+      "rms": 0.12521309955088455,
+      "sha256": "2d2e0657fba5b6576378f1481039785e96afe8c42abbfc9276bd2b45da3df5e3"
+    },
+    {
+      "file": "05_ZoneUnlock.wav",
+      "durationSeconds": 1.7,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.4,
+      "rms": 0.08986851584889072,
+      "sha256": "36f1583892e248e46205b2c8523b53cf8bdd0b03d1cc40024b8b604eba9ed3b6"
+    },
+    {
+      "file": "06_ShiftComplete.wav",
+      "durationSeconds": 2.6,
+      "channels": 1,
+      "sampleRate": 48000,
+      "peak": 0.4,
+      "rms": 0.07905634064676849,
+      "sha256": "bf6a52dfd9661cbac78a0d0664cfb285f1d760a2f6cf3949093742bd695e7fa8"
+    },
+    {
+      "file": "NightOfficeLoop.wav",
+      "durationSeconds": 24.0,
+      "channels": 2,
+      "sampleRate": 48000,
+      "peak": 0.3,
+      "rms": 0.06835606667791444,
+      "sha256": "e49504f690a46a42bb23000991c88eea164f8bf1f553cd6f4108b018a4daf696"
+    }
+  ],
+  "loopBoundaryMaxJump": 0.006073183385723442
+}

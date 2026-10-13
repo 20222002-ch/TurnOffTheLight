@@ -1,0 +1,398 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+namespace LightsOut
+{
+    public sealed class VerticalSkillDefinition
+    {
+        public readonly int Id, Branch, MaxLevel, PrerequisiteId, PrerequisiteLevel;
+        public readonly string Name, EffectDescription;
+        public readonly double BaseCost, CostGrowth;
+        public VerticalSkillDefinition(int id, int branch, string name, int max, double cost, double growth, int predecessor, int prerequisiteLevel, string effect)
+        { Id=id; Branch=branch; Name=name; MaxLevel=max; BaseCost=cost; CostGrowth=growth; PrerequisiteId=predecessor; PrerequisiteLevel=prerequisiteLevel; EffectDescription=effect; }
+    }
+
+    public enum LightOrigin { Movement, Automatic }
+
+    public sealed class VerticalExtinguishEvent
+    {
+        public int[] AffectedIds;
+        public double Reward;
+        public bool Automated;
+        public LightOrigin Origin;
+        public long ActionId;
+        public bool FloorCompleted;
+        public int[] CompletedFloorIds;
+    }
+
+    /// <summary>Logical rooms, growth, finite delayed propagation and saves. No input or rendering.</summary>
+    public sealed class LightsOutVerticalModel
+    {
+        public static readonly VerticalSkillDefinition[] Skills =
+        {
+            new VerticalSkillDefinition(0,0,"이동속도 증가",10,50,1.65,-1,0,"기본 이동속도 +12%/레벨"),
+            new VerticalSkillDefinition(1,0,"소등 범위 확장",5,120,1.9,0,3,"접촉 소등 반경 +0.45/레벨"),
+            new VerticalSkillDefinition(2,0,"대시",5,300,1.9,1,2,"대시 해금 · 강화 시 재사용 시간 감소"),
+            new VerticalSkillDefinition(3,0,"대시 거리 증가",5,900,1.95,2,2,"대시 이동거리 +2/레벨"),
+            new VerticalSkillDefinition(4,0,"이동 중 보너스 수익",1,14000,1,3,3,"이동에서 발생한 모든 소등 보상 2배"),
+            new VerticalSkillDefinition(5,1,"연쇄 소등",5,45,1.8,-1,0,"이동 소등에서 연쇄 발동 확률 +20%/레벨"),
+            new VerticalSkillDefinition(6,1,"연쇄 확장",5,160,1.9,5,2,"연쇄의 수평 전파 거리 +1칸/레벨"),
+            new VerticalSkillDefinition(7,1,"연쇄 가속",5,550,1.9,6,2,"연쇄 전파 간격 -15%/레벨 · 최대 75%"),
+            new VerticalSkillDefinition(8,1,"과부하",5,2200,1.9,7,2,"연쇄 발동 시 위아래 층 전파 확률 +5%/레벨"),
+            new VerticalSkillDefinition(9,1,"블랙아웃",1,16000,1,8,3,"연쇄 소등 30개 누적 후 다음 연쇄가 층 전체 소등"),
+            new VerticalSkillDefinition(10,2,"수직 소등",5,65,1.8,-1,0,"이동 소등에서 위층 전파 확률 +15%/레벨"),
+            new VerticalSkillDefinition(11,2,"층 전체 정전",5,220,1.9,10,2,"수직 발동 시 층 전체 정전 확률 +10%/레벨"),
+            new VerticalSkillDefinition(12,2,"수직 관통",5,800,1.9,11,2,"수직 소등이 위쪽으로 추가 1개 층/레벨 전파"),
+            new VerticalSkillDefinition(13,2,"상승 가속",5,2600,1.9,12,2,"연속 층 완료 중 카메라 추적 속도 +15%/레벨"),
+            new VerticalSkillDefinition(14,2,"초고속 돌파",1,18000,1,13,3,"10개 층 연속 완료 시 5초간 수직 확률 +25%p"),
+            new VerticalSkillDefinition(15,3,"자동 스위치",10,150,1.6,-1,0,"자동 소등 0.2개/초/레벨 · 소수량 누적"),
+            new VerticalSkillDefinition(16,3,"자동 소등 속도",10,380,1.6,15,3,"자동 소등 주기 -8%/레벨 · 최대 80%"),
+            new VerticalSkillDefinition(17,3,"자동 층 정전",5,1300,1.9,16,3,"자동 소등 30회마다 추가 1개 층 · 레벨별 추가효과 검토 중"),
+            new VerticalSkillDefinition(18,3,"자동 연쇄",5,3600,1.9,17,2,"자동 소등에서 연쇄 발동 확률 +10%/레벨"),
+            new VerticalSkillDefinition(19,3,"완전 자동화",1,20000,1,18,3,"자동 소등 속도 2배 · 자동 연쇄 확률 +20%p")
+        };
+
+        const int TotalFloors=300, RoomsPerFloor=4, MaxPending=8192, PerTickBudget=256;
+        const double MaxMoney=1e15;
+        static readonly string[] StageNames={"작은 사무실","사무동","대형 빌딩","복합 건물","야간 도시","도시 전력망"};
+        static readonly int[] StageStarts={0,12,36,72,120,200};
+        public event Action Changed;
+        public event Action<VerticalExtinguishEvent> Extinguished;
+        public int FloorCount { get { return TotalFloors; } }
+        public int FloorRooms { get { return RoomsPerFloor; } }
+        public double Money { get; private set; }
+        public double TotalEarned { get; private set; }
+        public long TotalOff { get; private set; }
+        public int CurrentFloor { get; private set; }
+        public int ClearedFloors { get; private set; }
+        public int HighestClearedFloor { get; private set; }
+        public int[] SkillLevels { get; private set; }
+        public int RunNumber { get; private set; }
+        public float SessionSeconds { get; private set; }
+        public float SurgeRemaining { get; private set; }
+        public int BlackoutCharge { get; private set; }
+        public int ConsecutiveFloors { get; private set; }
+        public int AutoFloorCharge { get; private set; }
+        public bool IsComplete { get { return ClearedFloors==TotalFloors; } }
+        public bool CanGoHome { get { return IsComplete; } }
+        public int PendingEventCount { get { return queue.Count; } }
+        public float MoveSpeed { get { return 4.8f*(1+.12f*SkillLevels[0]); } }
+        public float ExtinguishRadius { get { return .12f+.45f*SkillLevels[1]; } }
+        public bool DashUnlocked { get { return SkillLevels[2]>0; } }
+        public float DashDistance { get { return 5f+2f*SkillLevels[3]; } }
+        public float DashCooldown { get { return Math.Max(2.6f,5f-.6f*Math.Max(0,SkillLevels[2]-1)); } }
+        public float CameraSpeedMultiplier { get { return ConsecutiveFloors>=2 ? 1+.15f*SkillLevels[13] : 1; } }
+        public float ChainProbability { get { return ClampChance(SkillLevels[5]*.2f); } }
+        public float VerticalProbability { get { return ClampChance(SkillLevels[10]*.15f+(SurgeRemaining>0?.25f:0)); } }
+        public float AutoChainProbability { get { return ClampChance(SkillLevels[18]*.1f+(SkillLevels[19]>0?.2f:0)); } }
+        public float ChainInterval { get { return Math.Max(.055f,.22f*(1-Math.Min(.75f,SkillLevels[7]*.15f))); } }
+        public float AutoPeriodMultiplier { get { return Math.Max(.2f,1-SkillLevels[16]*.08f); } }
+        public float AutomationRate { get { return SkillLevels[15]*.2f/AutoPeriodMultiplier*(SkillLevels[19]>0?2:1); } }
+        public float AutomationProgress { get { return (float)Math.Min(1,automaticAccumulator); } }
+        public int StageIndex
+        {
+            get { int stage=0; for(int i=1;i<StageStarts.Length;i++) if(CurrentFloor>=StageStarts[i]) stage=i; return stage; }
+        }
+        public string StageName { get { return StageNames[StageIndex]; } }
+
+        bool[] on;
+        int[] floorRemaining;
+        uint randomState;
+        double clock,automaticAccumulator,lastFloorCompletion;
+        long nextActionId,nextSequence;
+        int autoCursor;
+        readonly List<Pending> queue=new List<Pending>();
+        enum PropagationKind { Contact, Chain, Vertical, WholeFloor, AutoBase }
+        sealed class RootAction
+        {
+            public long Id; public bool Automatic;
+            public readonly HashSet<int> Visited=new HashSet<int>();
+        }
+        sealed class Pending
+        {
+            public int Id; public double Due; public long Sequence;
+            public PropagationKind Kind; public RootAction Root;
+        }
+        sealed class Batch
+        {
+            public RootAction Root; public double Reward;
+            public readonly List<int> Ids=new List<int>();
+            public readonly List<int> Floors=new List<int>();
+        }
+
+        public LightsOutVerticalModel() { Reset(); }
+        public void Reset()
+        {
+            Money=0;TotalEarned=0;TotalOff=0;RunNumber=1;SessionSeconds=0;clock=0;
+            SkillLevels=new int[Skills.Length];nextActionId=0;nextSequence=0;
+            randomState=(uint)DateTime.UtcNow.Ticks^0x9E3779B9u;if(randomState==0)randomState=97193711;
+            RenewBuilding();Notify();
+        }
+        void RenewBuilding()
+        {
+            on=new bool[TotalFloors*RoomsPerFloor];for(int i=0;i<on.Length;i++)on[i]=true;
+            floorRemaining=new int[TotalFloors];for(int i=0;i<TotalFloors;i++)floorRemaining[i]=RoomsPerFloor;
+            CurrentFloor=0;ClearedFloors=0;HighestClearedFloor=-1;
+            SurgeRemaining=0;BlackoutCharge=0;ConsecutiveFloors=0;AutoFloorCharge=0;
+            automaticAccumulator=0;lastFloorCompletion=-100;autoCursor=0;queue.Clear();
+        }
+        public bool StartNextRun()
+        { if(!IsComplete)return false;RunNumber++;RenewBuilding();Notify();return true; }
+        public bool IsLightOn(int floor,int col)
+        { return ValidRoom(floor,col)&&on[floor*RoomsPerFloor+col]; }
+        public LightKind GetLightKind(int floor,int col) { return LightKind.Normal; }
+        public int GetRemainingRooms(int floor) { return floor>=0&&floor<TotalFloors?floorRemaining[floor]:0; }
+        public double GetRoomReward(int floor,bool automated=false)
+        { if(floor<0||floor>=TotalFloors)return 0;return (5+floor*.125)*(automated||SkillLevels[4]==0?1:2); }
+
+        public bool Contact(int floor,int col)
+        {
+            if(!IsLightOn(floor,col)||IsComplete)return false;
+            RootAction root=NewAction(false);int id=floor*RoomsPerFloor+col;root.Visited.Add(id);
+            Batch batch=new Batch{Root=root};
+            Process(new Pending{Id=id,Due=clock,Root=root,Kind=PropagationKind.Contact},batch);
+            Emit(batch);Notify();return true;
+        }
+
+        public bool CanBuySkill(int id)
+        {
+            return id>=0&&id<Skills.Length&&SkillLevels[id]<Skills[id].MaxLevel&&
+                (Skills[id].PrerequisiteId<0||SkillLevels[Skills[id].PrerequisiteId]>=Skills[id].PrerequisiteLevel)&&Money>=GetSkillCost(id);
+        }
+        public double GetSkillCost(int id)
+        { if(id<0||id>=Skills.Length||SkillLevels[id]>=Skills[id].MaxLevel)return double.PositiveInfinity;return Math.Ceiling(Skills[id].BaseCost*Math.Pow(Skills[id].CostGrowth,SkillLevels[id])); }
+        public bool BuySkill(int id)
+        { if(!CanBuySkill(id))return false;Money-=GetSkillCost(id);SkillLevels[id]++;Notify();return true; }
+        public string GetLockReason(int id)
+        {
+            if(id<0||id>=Skills.Length)return "알 수 없는 스킬입니다.";
+            VerticalSkillDefinition s=Skills[id];
+            if(SkillLevels[id]>=s.MaxLevel)return "최대 레벨에 도달했습니다.";
+            if(s.PrerequisiteId>=0&&SkillLevels[s.PrerequisiteId]<s.PrerequisiteLevel)return Skills[s.PrerequisiteId].Name+" Lv."+s.PrerequisiteLevel+" 필요";
+            if(Money<GetSkillCost(id))return "성과급이 부족합니다. 필요한 금액: "+GetSkillCost(id).ToString("N0");
+            return "강화 가능";
+        }
+        public string GetCurrentEffect(int id)
+        { return id<0||id>=Skills.Length?string.Empty:DescribeEffect(id,SkillLevels[id]); }
+        public string GetNextEffect(int id)
+        { if(id<0||id>=Skills.Length)return string.Empty;if(SkillLevels[id]>=Skills[id].MaxLevel)return "최대 레벨 · "+GetCurrentEffect(id);return DescribeEffect(id,SkillLevels[id]+1); }
+        string DescribeEffect(int id,int level)
+        {
+            if(level==0)return "미해금 · "+Skills[id].EffectDescription;
+            switch(id)
+            {
+                case 0:return "이동속도 "+(4.8f*(1+.12f*level)).ToString("0.0")+" (+"+(level*12)+"%)";
+                case 1:return "주변 소등 반경 "+(.12f+.45f*level).ToString("0.00");
+                case 2:return "대시 해금 · 재사용 "+Math.Max(2.6f,5-.6f*(level-1)).ToString("0.0")+"초";
+                case 3:return "대시 거리 "+(5+2*level).ToString("0")+" (기본 5)";
+                case 4:return "이동에서 시작된 모든 소등 수익 ×2";
+                case 5:return "이동 소등 연쇄 확률 "+(level*20)+"%";
+                case 6:return "수평 연쇄 최대 거리 "+(1+level)+"칸";
+                case 7:return "전파 간격 "+Math.Max(.055f,.22f*(1-level*.15f)).ToString("0.000")+"초 (-"+(level*15)+"%)";
+                case 8:return "연쇄 발동 시 위아래 전파 "+(level*5)+"%";
+                case 9:return "연쇄 30개마다 다음 연쇄가 층 전체 소등";
+                case 10:return "위층 같은 방 수직 소등 "+(level*15)+"%";
+                case 11:return "수직 발동 시 층 전체 소등 "+(level*10)+"%";
+                case 12:return "수직 전파 총 "+(1+level)+"개 층";
+                case 13:return "연속 층 완료 중 카메라 추적 +"+(level*15)+"%";
+                case 14:return "10개 층 연속 완료: 5초간 수직 확률 +25%p";
+                case 15:return "자동 소등 기본 "+(level*.2f).ToString("0.0")+"개 / 초";
+                case 16:return "자동 주기 -"+(level*8)+"% (원래의 "+(100-level*8)+"%)";
+                case 17:return "자동 소등 30회마다 추가 1층 · 레벨별 추가효과 검토 중";
+                case 18:return "자동 연쇄 발동 "+(level*10)+"%";
+                default:return "자동 속도 ×2 · 자동 연쇄 확률 +20%p";
+            }
+        }
+
+        public void Tick(float dt)
+        {
+            if(float.IsNaN(dt)||float.IsInfinity(dt)||dt<=0)return;
+            dt=Math.Min(dt,60);clock+=dt;SessionSeconds=Math.Min(315360000f,SessionSeconds+dt);
+            bool dirty=false;
+            if(SurgeRemaining>0){SurgeRemaining=Math.Max(0,SurgeRemaining-dt);dirty=SurgeRemaining==0;}
+            if(ConsecutiveFloors>0&&clock-lastFloorCompletion>3){ConsecutiveFloors=0;dirty=true;}
+            if(IsComplete){if(dirty)Notify();return;}
+            Dictionary<long,Batch> batches=new Dictionary<long,Batch>();
+            automaticAccumulator=Math.Min(10000,automaticAccumulator+AutomationRate*dt);
+            int budget=PerTickBudget;
+            while(automaticAccumulator>=1&&budget>0&&!IsComplete)
+            {
+                int id=FindNextOn();if(id<0){automaticAccumulator=0;break;}
+                automaticAccumulator-=1;budget--;RootAction root=NewAction(true);root.Visited.Add(id);
+                Batch batch=new Batch{Root=root};batches.Add(root.Id,batch);
+                Process(new Pending{Id=id,Root=root,Kind=PropagationKind.AutoBase,Due=clock},batch);dirty=true;
+            }
+            while(budget>0&&queue.Count>0&&queue[0].Due<=clock&&!IsComplete)
+            {
+                Pending item=Pop();budget--;if(!on[item.Id])continue;
+                Batch batch;if(!batches.TryGetValue(item.Root.Id,out batch)){batch=new Batch{Root=item.Root};batches.Add(item.Root.Id,batch);}
+                Process(item,batch);dirty=true;
+            }
+            if(IsComplete)queue.Clear();
+            foreach(Batch batch in batches.Values)Emit(batch);
+            if(dirty)Notify();
+        }
+
+        RootAction NewAction(bool automatic) { return new RootAction{Id=++nextActionId,Automatic=automatic}; }
+        void Process(Pending item,Batch batch)
+        {
+            if(!on[item.Id])return;
+            int floor=item.Id/RoomsPerFloor,col=item.Id%RoomsPerFloor;
+            on[item.Id]=false;floorRemaining[floor]--;TotalOff=Math.Min(9000000000000000L,TotalOff+1);
+            double reward=GetRoomReward(floor,item.Root.Automatic);AddMoney(reward);batch.Reward+=reward;batch.Ids.Add(item.Id);
+            if(item.Kind==PropagationKind.Chain&&SkillLevels[9]>0)
+            {
+                if(BlackoutCharge>=30){BlackoutCharge=0;ScheduleFloor(item.Root,floor,ChainInterval);}
+                BlackoutCharge=Math.Min(30,BlackoutCharge+1);
+            }
+            if(floorRemaining[floor]==0)
+            {
+                ClearedFloors++;HighestClearedFloor=Math.Max(HighestClearedFloor,floor);batch.Floors.Add(floor);
+                int previous=CurrentFloor;
+                while(CurrentFloor<TotalFloors-1&&floorRemaining[CurrentFloor]==0)CurrentFloor++;
+                int advance=CurrentFloor-previous;
+                if(IsComplete)advance=Math.Max(1,advance);
+                if(advance>0)
+                {
+                    ConsecutiveFloors=clock-lastFloorCompletion<=3?ConsecutiveFloors+advance:advance;lastFloorCompletion=clock;
+                    if(ConsecutiveFloors>=10&&SkillLevels[14]>0){SurgeRemaining=5;ConsecutiveFloors%=10;}
+                }
+            }
+            if(item.Root.Automatic&&SkillLevels[17]>0)
+            {
+                AutoFloorCharge++;
+                if(AutoFloorCharge>=30){AutoFloorCharge-=30;int next=FindNextOn();if(next>=0)ScheduleFloor(item.Root,next/RoomsPerFloor,ChainInterval);}
+            }
+            float chainChance=item.Root.Automatic?AutoChainProbability:ChainProbability;
+            if(Roll(chainChance))
+            {
+                int target=FindHorizontalTarget(floor,col,item.Root);
+                if(target>=0)Schedule(item.Root,target,PropagationKind.Chain,ChainInterval);
+                if(Roll(SkillLevels[8]*.05f))
+                {
+                    Schedule(item.Root,(floor-1)*RoomsPerFloor+col,PropagationKind.Chain,ChainInterval*1.5);
+                    Schedule(item.Root,(floor+1)*RoomsPerFloor+col,PropagationKind.Chain,ChainInterval*1.5);
+                }
+            }
+            bool verticalEligible=!item.Root.Automatic||item.Kind!=PropagationKind.AutoBase;
+            if(verticalEligible&&Roll(VerticalProbability))
+            {
+                for(int step=1;step<=1+SkillLevels[12];step++)
+                {
+                    int upper=floor+step;if(upper>=TotalFloors)break;
+                    Schedule(item.Root,upper*RoomsPerFloor+col,PropagationKind.Vertical,ChainInterval*step);
+                    if(Roll(SkillLevels[11]*.1f))ScheduleFloor(item.Root,upper,ChainInterval*step);
+                }
+            }
+        }
+        int FindHorizontalTarget(int floor,int col,RootAction root)
+        {
+            int range=1+SkillLevels[6];bool leftFirst=NextRandom()<.5;
+            for(int distance=1;distance<=range;distance++)
+            {
+                int a=col+(leftFirst?-distance:distance),b=col+(leftFirst?distance:-distance);
+                if(a>=0&&a<RoomsPerFloor){int id=floor*RoomsPerFloor+a;if(on[id]&&!root.Visited.Contains(id))return id;}
+                if(b>=0&&b<RoomsPerFloor){int id=floor*RoomsPerFloor+b;if(on[id]&&!root.Visited.Contains(id))return id;}
+            }
+            return -1;
+        }
+        int FindNextOn()
+        {
+            for(int checkedCount=0;checkedCount<on.Length;checkedCount++)
+            { int id=(autoCursor+checkedCount)%on.Length;if(on[id]){autoCursor=(id+1)%on.Length;return id;} }
+            return -1;
+        }
+        void ScheduleFloor(RootAction root,int floor,double delay)
+        { if(floor<0||floor>=TotalFloors)return;for(int col=0;col<RoomsPerFloor;col++)Schedule(root,floor*RoomsPerFloor+col,PropagationKind.WholeFloor,delay); }
+        void Schedule(RootAction root,int id,PropagationKind kind,double delay)
+        {
+            if(id<0||id>=on.Length||!on[id]||queue.Count>=MaxPending||root.Visited.Count>=on.Length||!root.Visited.Add(id))return;
+            Push(new Pending{Id=id,Root=root,Kind=kind,Due=clock+Math.Max(.001,delay),Sequence=++nextSequence});
+        }
+        static bool Earlier(Pending a,Pending b) { return a.Due<b.Due||(a.Due==b.Due&&a.Sequence<b.Sequence); }
+        void Push(Pending item)
+        {
+            queue.Add(item);int at=queue.Count-1;
+            while(at>0){int parent=(at-1)/2;if(!Earlier(queue[at],queue[parent]))break;Pending temp=queue[parent];queue[parent]=queue[at];queue[at]=temp;at=parent;}
+        }
+        Pending Pop()
+        {
+            Pending result=queue[0],last=queue[queue.Count-1];queue.RemoveAt(queue.Count-1);if(queue.Count==0)return result;
+            queue[0]=last;int at=0;
+            while(true){int child=at*2+1;if(child>=queue.Count)break;if(child+1<queue.Count&&Earlier(queue[child+1],queue[child]))child++;if(!Earlier(queue[child],queue[at]))break;Pending temp=queue[at];queue[at]=queue[child];queue[child]=temp;at=child;}
+            return result;
+        }
+        void Emit(Batch batch)
+        {
+            if(batch.Ids.Count==0||Extinguished==null)return;
+            Extinguished(new VerticalExtinguishEvent{AffectedIds=batch.Ids.ToArray(),Reward=batch.Reward,Automated=batch.Root.Automatic,
+                Origin=batch.Root.Automatic?LightOrigin.Automatic:LightOrigin.Movement,ActionId=batch.Root.Id,FloorCompleted=batch.Floors.Count>0,CompletedFloorIds=batch.Floors.ToArray()});
+        }
+        void AddMoney(double amount) { Money=Math.Min(MaxMoney,Money+amount);TotalEarned=Math.Min(MaxMoney,TotalEarned+amount); }
+        bool Roll(float chance) { return chance>0&&NextRandom()<ClampChance(chance); }
+        double NextRandom() { randomState^=randomState<<13;randomState^=randomState>>17;randomState^=randomState<<5;return randomState/4294967296.0; }
+        static float ClampChance(float chance) { return Math.Max(0,Math.Min(1,chance)); }
+        static bool ValidRoom(int floor,int col) { return floor>=0&&floor<TotalFloors&&col>=0&&col<RoomsPerFloor; }
+        void Notify() { if(Changed!=null)Changed(); }
+
+        [Serializable] sealed class SavedPending
+        { public int id,kind;public double delay;public long action,sequence;public bool automated; }
+        [Serializable] sealed class SaveState
+        {
+            public int version,run;public double money,earned,clock,automaticAccumulator,lastFloorCompletion;
+            public long off,action,sequence;public uint random;
+            public float session,surge;public int blackout,consecutive,autoFloor,autoCursor;
+            public int[] skills;public bool[] lights;public List<SavedPending> pending;
+        }
+        public string ExportJson()
+        {
+            List<SavedPending> pending=new List<SavedPending>(queue.Count);
+            foreach(Pending item in queue)pending.Add(new SavedPending{id=item.Id,kind=(int)item.Kind,delay=Math.Max(0,item.Due-clock),action=item.Root.Id,sequence=item.Sequence,automated=item.Root.Automatic});
+            return JsonUtility.ToJson(new SaveState{version=2,run=RunNumber,money=Money,earned=TotalEarned,off=TotalOff,clock=clock,
+                action=nextActionId,sequence=nextSequence,random=randomState,session=SessionSeconds,surge=SurgeRemaining,blackout=BlackoutCharge,
+                consecutive=ConsecutiveFloors,autoFloor=AutoFloorCharge,autoCursor=autoCursor,automaticAccumulator=automaticAccumulator,
+                lastFloorCompletion=lastFloorCompletion,skills=SkillLevels,lights=on,pending=pending});
+        }
+        public bool ImportJson(string json)
+        {
+            if(string.IsNullOrEmpty(json)||json.Length>2000000)return false;SaveState s;
+            try{s=JsonUtility.FromJson<SaveState>(json);}catch(Exception){return false;}
+            if(s==null||s.version!=2||s.run<1||s.run>=1000000000||!Finite(s.money)||s.money<0||s.money>MaxMoney||
+                !Finite(s.earned)||s.earned<s.money||s.earned>MaxMoney||s.off<0||s.off>9000000000000000L||
+                !Finite(s.clock)||s.clock<0||!Finite(s.automaticAccumulator)||s.automaticAccumulator<0||s.automaticAccumulator>10000||
+                !Finite(s.lastFloorCompletion)||s.lastFloorCompletion>s.clock||!Finite(s.session)||s.session<0||s.session>315360000||
+                !Finite(s.surge)||s.surge<0||s.surge>5||s.blackout<0||s.blackout>30||s.consecutive<0||s.consecutive>TotalFloors||
+                s.autoFloor<0||s.autoFloor>=30||s.autoCursor<0||s.autoCursor>=TotalFloors*RoomsPerFloor||s.action<0||s.sequence<0||
+                s.skills==null||s.skills.Length!=Skills.Length||s.lights==null||s.lights.Length!=TotalFloors*RoomsPerFloor||
+                s.pending==null||s.pending.Count>MaxPending)return false;
+            for(int i=0;i<Skills.Length;i++)
+            { if(s.skills[i]<0||s.skills[i]>Skills[i].MaxLevel)return false;int p=Skills[i].PrerequisiteId;if(s.skills[i]>0&&p>=0&&s.skills[p]<Skills[i].PrerequisiteLevel)return false; }
+            Dictionary<long,bool> origins=new Dictionary<long,bool>();
+            foreach(SavedPending item in s.pending)
+            {
+                if(item==null||item.id<0||item.id>=s.lights.Length||item.kind<0||item.kind>4||!Finite(item.delay)||item.delay<0||item.delay>60||
+                    item.action<1||item.action>s.action||item.sequence<0||item.sequence>s.sequence)return false;
+                bool origin;if(origins.TryGetValue(item.action,out origin)&&origin!=item.automated)return false;origins[item.action]=item.automated;
+            }
+            on=s.lights;SkillLevels=s.skills;Money=s.money;TotalEarned=s.earned;TotalOff=s.off;clock=s.clock;SessionSeconds=s.session;
+            RunNumber=s.run;nextActionId=s.action;nextSequence=s.sequence;randomState=s.random==0?97193711:s.random;
+            SurgeRemaining=s.surge;BlackoutCharge=s.blackout;ConsecutiveFloors=s.consecutive;AutoFloorCharge=s.autoFloor;
+            autoCursor=s.autoCursor;automaticAccumulator=s.automaticAccumulator;lastFloorCompletion=s.lastFloorCompletion;
+            floorRemaining=new int[TotalFloors];ClearedFloors=0;HighestClearedFloor=-1;
+            for(int f=0;f<TotalFloors;f++)
+            { for(int c=0;c<RoomsPerFloor;c++)if(on[f*RoomsPerFloor+c])floorRemaining[f]++;if(floorRemaining[f]==0){ClearedFloors++;HighestClearedFloor=f;} }
+            CurrentFloor=0;while(CurrentFloor<TotalFloors-1&&floorRemaining[CurrentFloor]==0)CurrentFloor++;
+            queue.Clear();Dictionary<long,RootAction> roots=new Dictionary<long,RootAction>();
+            foreach(SavedPending item in s.pending)
+            {
+                if(!on[item.id]||IsComplete)continue;RootAction root;
+                if(!roots.TryGetValue(item.action,out root)){root=new RootAction{Id=item.action,Automatic=item.automated};roots.Add(root.Id,root);}
+                if(!root.Visited.Add(item.id))continue;
+                Push(new Pending{Id=item.id,Root=root,Kind=(PropagationKind)item.kind,Due=clock+item.delay,Sequence=item.sequence});
+            }
+            Notify();return true;
+        }
+        static bool Finite(double value) { return !double.IsNaN(value)&&!double.IsInfinity(value); }
+    }
+}
