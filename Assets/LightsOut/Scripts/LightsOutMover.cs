@@ -46,6 +46,7 @@ namespace LightsOut
             Vector2 input = movement.ReadValue<Vector2>();
             StepInput(input, dt, dashRequested); dashRequested = false;
         }
+        public void RequestDash() { dashRequested = true; }
         public void StepInput(Vector2 input, float dt, bool requestDash = false)
         {
             if (Model == null || dt <= 0 || Model.IsComplete) return;

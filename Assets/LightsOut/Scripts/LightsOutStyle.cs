@@ -11,7 +11,7 @@ namespace LightsOut
             if (value >= 1e12) return "₩ " + (value / 1e12).ToString("0.##") + "조";
             if (value >= 1e8) return "₩ " + (value / 1e8).ToString("0.##") + "억";
             if (value >= 1e4) return "₩ " + (value / 1e4).ToString("0.##") + "만";
-            return "₩ " + value.ToString("N0");
+            return "₩ " + value.ToString("#,0.###");
         }
     }
 }

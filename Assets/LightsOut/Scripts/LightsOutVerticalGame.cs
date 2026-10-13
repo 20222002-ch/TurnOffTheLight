@@ -22,14 +22,15 @@ namespace LightsOut
         public TMP_FontAsset Font => font;
         public RectTransform UIRoot => canvasRoot;
         public LightsOutVerticalModel Model { get; private set; }
+        public LightsOutRentModel Career { get; private set; }
         public bool IsPaused { get; private set; }
         public bool Testing { get; set; }
         public int VisibleFloorCount { get; private set; }
         public LightsOutCameraRig CameraRig { get; private set; }
-        const string SaveKey = "LightsOut.Movement.v2";
+        const string SaveKey = "LightsOut.Rent.v3";
         const int PoolFloors = 48;
         static readonly Color Amber = LightsOutStyle.Hex("F6C96D"), Mint = LightsOutStyle.Hex("8DE7C5"), Muted = LightsOutStyle.Hex("829BB3"), Ink = LightsOutStyle.Hex("091422"), Cream = LightsOutStyle.Hex("F5EFDA");
-        [Serializable] sealed class SaveState { public int version = 2; public string model; public float x, y; }
+        [Serializable] sealed class SaveState { public int version = 3; public string career; public float x, y; }
         sealed class RoomView { public SpriteRenderer body, lamp, glow; public Color displayed; }
         sealed class FloorView { public GameObject root; public TMP_Text label; public RoomView[] rooms; public int floor = -1; }
         readonly List<FloorView> floorPool = new List<FloorView>();
@@ -39,19 +40,21 @@ namespace LightsOut
         RectTransform progressFill, floating, modal;
         UnityEngine.UI.Button dashButton;
         LightsOutSkillTree tree;
+        LightsOutRentPanel rentPanel;
         LightsOutAudio sound;
         InputAction pauseAction, treeAction;
         RenderTexture render;
         Transform skyline;
         float saveTimer, refreshTimer, toastTimer, lastSound;
         int quickPage;
-        bool wasComplete;
+        bool treeShowing;
+        RentPhase lastPhase;
         string saveNotice;
 
         void Awake()
         {
             Application.runInBackground = true; Application.targetFrameRate = 60;
-            Model = new LightsOutVerticalModel();
+            Career = new LightsOutRentModel(); Model = Career.Work;
             CacheUI();
             Vector2 start = new Vector2(-3.6f, .9f);
             string json = PlayerPrefs.GetString(SaveKey, "");
@@ -60,13 +63,13 @@ namespace LightsOut
                 try
                 {
                     SaveState saved = JsonUtility.FromJson<SaveState>(json);
-                    if (saved != null && saved.version == 2 && Model.ImportJson(saved.model))
+                    if (saved != null && saved.version == 3 && Career.ImportJson(saved.career))
                     {
                         float x = float.IsNaN(saved.x) || float.IsInfinity(saved.x) ? -3.6f : saved.x;
                         float y = float.IsNaN(saved.y) || float.IsInfinity(saved.y) ? .9f : saved.y;
                         start = new Vector2(Mathf.Clamp(x,-4.55f,4.55f), Mathf.Clamp(y,.22f,Model.FloorCount*LightsOutMover.FloorHeight-.22f));
                     }
-                    else saveNotice = "이동 버전의 저장 데이터가 유효하지 않아 새 근무를 시작합니다.";
+                    else saveNotice = "월세 근무 저장을 읽지 못해 1단계에서 시작합니다.";
                 }
                 catch (ArgumentException) { saveNotice = "저장 데이터를 읽지 못해 새 근무를 시작합니다."; }
             }
@@ -75,16 +78,18 @@ namespace LightsOut
             Model.Changed += Refresh;
             Model.Extinguished += OnExtinguished;
             tree = gameObject.AddComponent<LightsOutSkillTree>(); tree.Initialize(this);
+            rentPanel = gameObject.AddComponent<LightsOutRentPanel>(); rentPanel.Initialize(this);
             BindUI();
             playerLocator=UIText(floating,"Player Locator","관리인",0,0,86,28,14,Mint);
             playerLocator.alignment=TextAlignmentOptions.Center;
             pauseAction = new InputAction("Pause", InputActionType.Button, "<Keyboard>/escape");
-            pauseAction.performed += _ => { if (IsPaused) CloseSkillTree(); else ShowSettings(); }; pauseAction.Enable();
+            pauseAction.performed += _ => HandlePause(); pauseAction.Enable();
             treeAction = new InputAction("Skill Tree", InputActionType.Button, "<Keyboard>/t");
-            treeAction.performed += _ => { if (IsPaused) CloseSkillTree(); else OpenSkillTree(); }; treeAction.Enable();
-            // A completed save must reopen the finish screen so the next building stays reachable.
-            wasComplete = false;
+            treeAction.performed += _ => { if(rentPanel.IsRouletteOpen){rentPanel.TryCloseRoulette();return;} if (treeShowing) CloseSkillTree(); else OpenSkillTree(); }; treeAction.Enable();
+            lastPhase = Career.Phase;
             Refresh();
+            if(Career.Phase!=RentPhase.Working) ShowCheckout();
+            else if(string.IsNullOrEmpty(json)) ShowCareerIntro();
             if (!string.IsNullOrEmpty(saveNotice)) Notify(saveNotice);
         }
         void CacheUI()
@@ -97,6 +102,7 @@ namespace LightsOut
             modal.gameObject.SetActive(false);
             T("Subtitle").text="WASD / 방향키로 이동   ·   닿으면 소등   ·   T 스킬 트리";
             T("UpgradeTitle").text="더 높이, 더 빠르게";
+            T("MoneyCaption").text="보유금 · 정산된 수입";
             for(int i=0;i<4;i++)
             {
                 var b=canvasRoot.Find("Upgrade"+i).GetComponent<UnityEngine.UI.Button>(); quickButtons.Add(b);
@@ -113,7 +119,7 @@ namespace LightsOut
             SetText(canvasRoot.Find("UpgradePage1").GetComponentInChildren<TMP_Text>(),"수직 · 자동화");
             SetText(canvasRoot.Find("NextShiftButton").GetComponentInChildren<TMP_Text>(),"스킬 트리 열기  T →");
             dashButton=canvasRoot.Find("AdvanceButton").GetComponent<UnityEngine.UI.Button>();
-            Bind("AdvanceButton",()=> { if(!IsPaused) player.StepInput(player.Direction,.016f,true); });
+            Bind("AdvanceButton",()=> { if(!IsPaused&&Career.Phase==RentPhase.Working) player.RequestDash(); });
             Bind("AreaButton",()=>CameraRig.ChangeZoom(-1)); Bind("BlackoutButton",()=>CameraRig.ChangeZoom(1));
             SetText(canvasRoot.Find("AreaButton").GetComponentInChildren<TMP_Text>(),"가까이 보기\n줌 인  +");
             SetText(canvasRoot.Find("BlackoutButton").GetComponentInChildren<TMP_Text>(),"더 많은 층 보기\n줌 아웃  −");
@@ -126,47 +132,59 @@ namespace LightsOut
         {
             if(Model==null) return;
             float dt=Mathf.Min(Time.unscaledDeltaTime,.1f);
-            if(!IsPaused)
+            if(!IsPaused&&Career.Phase==RentPhase.Working)
             {
-                player.Step(dt); Model.Tick(dt); CameraRig.Tick(player.Position,Model,dt);
-                saveTimer+=dt; if(saveTimer>=8){Save();saveTimer=0;}
+                float elapsed=Mathf.Min(Time.unscaledDeltaTime,Career.TimeRemaining);
+                float workDt=Mathf.Min(elapsed,.1f);
+                player.Step(workDt); Career.Tick(elapsed); CameraRig.Tick(player.Position,Model,workDt);
+                saveTimer+=elapsed; if(saveTimer>=8){Save();saveTimer=0;}
+            }
+            if(Career.Phase!=lastPhase)
+            {
+                lastPhase=Career.Phase;
+                if(Career.Phase!=RentPhase.Working){sound.Play(5);ShowCheckout();Save();}
             }
             RenderRooms(dt);
             refreshTimer+=dt; if(refreshTimer>=.12f){Refresh();refreshTimer=0;}
             toastTimer-=dt; toast.gameObject.SetActive(toastTimer>0);
-            if(Model.IsComplete&&!wasComplete){sound.Play(5);Save();ShowFinish();} wasComplete=Model.IsComplete;
         }
+        public bool CanBuySkill(int id) => Career!=null&&!(rentPanel&&rentPanel.IsRouletteOpen)&&Career.CanBuySkill(id);
+        public string SkillLockReason(int id) => Career.GetSkillLockReason(id);
         public bool BuySkill(int id)
         {
-            if(Model.BuySkill(id)){sound.Play(3);Notify(LightsOutVerticalModel.Skills[id].Name+" 강화 완료");Save();Refresh();return true;}
-            Notify(Model.GetLockReason(id)); return false;
+            if(CanBuySkill(id)&&Career.BuySkill(id)){sound.Play(3);Notify(LightsOutVerticalModel.Skills[id].Name+" 강화 완료");Save();Refresh();return true;}
+            Notify(SkillLockReason(id)); return false;
         }
         public void Notify(string text) { toast.text=text; toastTimer=3; toast.gameObject.SetActive(true); }
+        public void PlayRouletteCue(int index,float pitch=1,float gain=1) => sound?.PlayRouletteCue(index,pitch,gain);
+        public void SetRouletteTension(float intensity) => sound?.SetRouletteTension(intensity);
         void Refresh()
         {
             if(Model==null||money==null) return;
             int standing=Mathf.Clamp(Mathf.FloorToInt(player.Position.y/LightsOutMover.FloorHeight)+1,1,Model.FloorCount);
-            SetText(money,LightsOutStyle.Format(Model.Money)); SetText(zone,Model.StageName);
-            SetText(shift,"NIGHT SHIFT "+Model.RunNumber.ToString("00")+"  /  "+(Model.StageIndex+1)+"단계");
-            SetText(progress,"현재 "+standing+"층  ·  완료 "+Model.ClearedFloors+"층  ·  다음 관리층 "+(Model.CurrentFloor+1)+"층");
+            SetText(money,LightsOutStyle.Format(Model.Money)); SetText(zone,Model.FloorCount+"층 야간 소등 업무");
+            SetText(shift,Career.Stage+"단계  ·  기회 "+Career.AttemptNumber+" / 5");
+            SetText(progress,"현재 "+standing+"층  ·  완료 "+Model.ClearedFloors+" / "+Model.FloorCount+"층  ·  밀린 월세 "+LightsOutStyle.Format(Career.RentDue));
             progressFill.sizeDelta=new Vector2(1000*Mathf.Clamp01(Model.ClearedFloors/(float)Model.FloorCount),5);
-            SetText(combo,Model.SurgeRemaining>0?"초고속 돌파 "+Model.SurgeRemaining.ToString("0.0")+"s":Model.BlackoutCharge>0?"BLACKOUT "+Model.BlackoutCharge+" / 30":"MOVE & LIGHTS OUT");
-            SetText(total,"누적 소등 "+Model.TotalOff.ToString("N0")+"개");
+            int seconds=Mathf.CeilToInt(Career.TimeRemaining);
+            SetText(combo,"남은 시간  "+(seconds/60).ToString("00")+":"+(seconds%60).ToString("00"));
+            combo.color=seconds<=10?LightsOutStyle.Hex("F08B86"):Amber;
+            SetText(total,"이번 근무 수입 "+LightsOutStyle.Format(Model.PendingIncome));
             SetText(reward,"이동속도 "+Model.MoveSpeed.ToString("0.0")+"  ·  소등 범위 "+Model.ExtinguishRadius.ToString("0.0"));
             SetText(automation,Model.AutomationRate>0?"자동 소등 "+Model.AutomationRate.ToString("0.0")+"개 / 초":"WASD · 방향키로 방을 지나가세요");
             dashButton.interactable=Model.DashUnlocked&&!IsPaused&&player.DashCooldown<=0;
             SetText(dashButton.GetComponentInChildren<TMP_Text>(),!Model.DashUnlocked?"대시를 해금하면 Space로 돌파":player.DashCooldown>0?"대시 준비 "+player.DashCooldown.ToString("0.0")+"초":"대시  SPACE →");
             SetText(pageHint,quickPage==0?"이동하면서 성장하세요":"위층으로 퍼지는 소등과 자동화");
-            SetText(hint,"방에 닿으면 자동 소등 · 꺼진 방은 중복 보상 없음 · 화면 밖 상태도 유지됩니다.");
+            SetText(hint,"5번 안에 월세를 갚으세요 · 전부 소등하거나 시간이 끝나면 기회 1회 차감 · 퇴근 후 수입 정산");
             for(int slot=0;slot<4;slot++)
             {
                 int id=QuickId(slot),level=Model.SkillLevels[id];var s=LightsOutVerticalModel.Skills[id];
                 SetText(quickNames[slot],s.Name+"  <color=#829BB3>"+level+" / "+s.MaxLevel+"</color>");
                 SetText(quickDescriptions[slot],Model.GetNextEffect(id));
-                string locked=Model.GetLockReason(id);bool max=level>=s.MaxLevel;
+                bool max=level>=s.MaxLevel;
                 SetText(quickCosts[slot],max?"강화 완료":s.PrerequisiteId>=0&&Model.SkillLevels[s.PrerequisiteId]<s.PrerequisiteLevel?"선행 스킬 필요":LightsOutStyle.Format(Model.GetSkillCost(id))+"  +");
-                quickButtons[slot].interactable=Model.CanBuySkill(id)&&!IsPaused;
-                quickCosts[slot].color=Model.CanBuySkill(id)?Amber:Muted;
+                quickButtons[slot].interactable=CanBuySkill(id)&&!IsPaused;
+                quickCosts[slot].color=CanBuySkill(id)?Amber:Muted;
             }
         }
         void SetUpWorld(Vector2 start)
@@ -256,14 +274,67 @@ namespace LightsOut
         }
         IEnumerator FloatReward(RectTransform r,TMP_Text t)
         {Vector2 p=r.anchoredPosition;for(float a=0;a<1;a+=Time.unscaledDeltaTime*1.5f){if(!r)yield break;r.anchoredPosition=p+Vector2.up*a*40;t.alpha=1-a;yield return null;}if(r)Destroy(r.gameObject);}
-        public void OpenSkillTree(){if(IsPaused)return;SetPaused(true);tree.Show();}
-        public void CloseSkillTree(){tree.Hide();modal.gameObject.SetActive(false);SetPaused(false);Refresh();}
+        public void OpenSkillTree()
+        {
+            if(rentPanel.IsRouletteOpen)return;
+            if(Career.Phase==RentPhase.Checkout||Career.Phase==RentPhase.Bankrupt){Notify("먼저 퇴근 수입을 정산하세요.");return;}
+            rentPanel.Hide();modal.gameObject.SetActive(false);SetPaused(true);treeShowing=true;tree.Show();Refresh();
+        }
+        public void CloseSkillTree()
+        {
+            if(rentPanel.IsRouletteOpen){rentPanel.TryCloseRoulette();return;}
+            tree.Hide();treeShowing=false;modal.gameObject.SetActive(false);
+            if(Career.Phase==RentPhase.Working){rentPanel.Hide();SetPaused(false);}
+            else ShowCheckout();
+            Refresh();
+        }
+        void HandlePause()
+        {
+            if(rentPanel.IsRouletteOpen){rentPanel.TryCloseRoulette();return;}
+            if(treeShowing){CloseSkillTree();return;}
+            if(Career.Phase!=RentPhase.Working){ShowCheckout();return;}
+            if(IsPaused)CloseSkillTree();else ShowSettings();
+        }
+        void ShowCheckout()
+        {tree.Hide();treeShowing=false;modal.gameObject.SetActive(false);SetPaused(true);rentPanel.Show();Refresh();}
+        public bool KeepShiftIncome()
+        {
+            if(rentPanel.IsRouletteOpen||!Career.SkipRoulette())return false;
+            lastPhase=Career.Phase;Save();Refresh();rentPanel.Show();return true;
+        }
+        public bool RollShiftIncome()
+        {
+            if(rentPanel.IsSpinning||!Career.SpinRoulette())return false;
+            // Persist the draw before the wheel animates; reloading cannot offer a second draw.
+            lastPhase=Career.Phase;Save();return true;
+        }
+        public bool PayRent()
+        {
+            if(rentPanel.IsRouletteOpen||!Career.PayRent())return false;
+            BeginWorkUi();Notify("월세 납부 완료! 잔액과 강화를 가지고 다음 단계로 갑니다.");return true;
+        }
+        public bool StartNextShift()
+        {if(rentPanel.IsRouletteOpen||!Career.StartNextAttempt())return false;BeginWorkUi();return true;}
+        public void RestartCareer()
+        {if(rentPanel.IsRouletteOpen)return;Career.Reset();BeginWorkUi();Notify("1단계에서 새로 시작합니다.");}
+        void BeginWorkUi()
+        {
+            lastPhase=Career.Phase;tree.Hide();treeShowing=false;rentPanel.Hide();modal.gameObject.SetActive(false);
+            player.ResetMotion(new Vector2(-3.6f,.9f));CameraRig.Snap(player.Position);SetPaused(false);saveTimer=0;Save();Refresh();
+        }
+        void ShowCareerIntro()
+        {
+            Modal("오늘도 밀린 월세 때문에 야근입니다.","건물의 불을 끄고 성과급을 모아 월세를 갚으세요.");
+            UIText(modal,"Story","단계마다 근무 기회는 5번입니다.\n모든 불을 끄거나 제한 시간이 끝나면 기회가 줄어듭니다.\n\n월세를 먼저 내고 잔액을 가지고 다음 단계로 갈 수도,\n강화에 투자하며 남은 기회까지 일할 수도 있습니다.\n\n퇴근 수입은 그대로 받거나 룰렛에 걸 수 있습니다.\n×2 10칸 · 전액 손실 10칸 · ×10 1칸\n5번째 정산까지 월세가 부족하면 1단계부터 다시 시작합니다.",380,268,840,280,21,Cream);
+            ModalButton("첫 근무 시작 · 3층 / 30초 →",580,CloseSkillTree,Amber);
+        }
         void SetPaused(bool paused){IsPaused=paused;player.SetInputEnabled(!paused);}
         void ShowSettings()
         {
+            if(rentPanel.IsRouletteOpen)return;
             Modal("잠깐 쉬어가기","이동과 자동화가 일시 정지됩니다.");
             ModalButton("계속 근무하기",270,CloseSkillTree,Amber);
-            ModalButton("스킬 트리 보기",334,()=>{modal.gameObject.SetActive(false);tree.Show();},LightsOutStyle.Hex("20384E"));
+            ModalButton("스킬 트리 보기",334,OpenSkillTree,LightsOutStyle.Hex("20384E"));
             bool audible=PlayerPrefs.GetFloat("LightsOut.Volume",.6f)>0;
             ModalButton(audible?"소리 끄기":"소리 켜기",398,()=>{float v=audible?0:.6f;PlayerPrefs.SetFloat("LightsOut.Volume",v);sound.SetVolume(v);ShowSettings();},LightsOutStyle.Hex("20384E"));
             ModalButton("저장하고 계속하기",462,()=>{Save();CloseSkillTree();Notify("저장했습니다.");},LightsOutStyle.Hex("20384E"));
@@ -271,25 +342,20 @@ namespace LightsOut
         }
         void ShowHelp()
         {
+            if(rentPanel.IsRouletteOpen)return;
             Modal("관리인 업무 안내","방을 지나가는 것만으로 불이 꺼집니다.");
-            UIText(modal,"Instructions","WASD / 방향키: 상하좌우 자유 이동\n대각선도 같은 속도 · 중력, 점프, 벽 충돌 없음\n\n방에 닿으면 자동 소등하고 성과급을 받습니다.\nT: 스킬 트리 · ESC: 쉬어가기 · Space: 해금 후 대시\n\n이동 → 연쇄 → 수직 소등 → 자동화로 성장하세요.\n스킬 수치는 검증을 위한 초기 밸런스입니다.",380,265,840,280,22,Cream);
+            UIText(modal,"Instructions","WASD / 방향키: 자유 이동 · Space: 해금 후 대시\nT: 스킬 트리 · ESC: 일시 정지 (시간도 정지)\n\n전체 소등 또는 시간 종료마다 근무 기회 1회 차감.\n이번 수입은 퇴근 후 정산하며 기존 보유금은 보호됩니다.\n룰렛: ×2 10/21 · 전액 손실 10/21 · ×10 1/21.\n\n월세 차감 후 잔액과 강화를 다음 단계로 이월합니다.\n5회 안에 갚지 못하면 보유금과 강화가 초기화됩니다.",380,265,840,280,21,Cream);
             ModalButton("근무 시작 →",580,CloseSkillTree,Amber);
         }
         void ConfirmReset()
         {
-            Modal("새 근무를 시작할까요?","이동 버전의 소등 기록과 스킬이 초기화됩니다.");
+            Modal("1단계부터 다시 시작할까요?","월세 단계, 보유금, 스킬과 소등 기록이 초기화됩니다.");
             ModalButton("돌아가기",340,ShowSettings,Amber);
-            ModalButton("초기화하고 시작",406,()=>{Model.Reset();player.ResetMotion(new Vector2(-3.6f,.9f));CameraRig.Snap(player.Position);Save();wasComplete=false;CloseSkillTree();},LightsOutStyle.Hex("7C4652"));
-        }
-        void ShowFinish()
-        {
-            Modal("마지막 층까지 불을 껐습니다.","도시가 잠들었습니다. 오늘도 수고했어요.");
-            UIText(modal,"Record","완료한 층 "+Model.ClearedFloors+"\n누적 소등 "+Model.TotalOff.ToString("N0")+"개\n총 성과급 "+LightsOutStyle.Format(Model.TotalEarned),380,310,840,170,28,Mint);
-            ModalButton("강화를 유지하고 다음 건물로 →",550,()=>{Model.StartNextRun();player.ResetMotion(new Vector2(-3.6f,.9f));CameraRig.Snap(player.Position);Save();CloseSkillTree();},Amber);
+            ModalButton("초기화하고 시작",406,RestartCareer,LightsOutStyle.Hex("7C4652"));
         }
         void Modal(string title,string subtitle)
         {
-            SetPaused(true);tree.Hide();for(int i=modal.childCount-1;i>=0;i--){var o=modal.GetChild(i).gameObject;o.SetActive(false);Destroy(o);}modal.gameObject.SetActive(true);
+            SetPaused(true);tree.Hide();treeShowing=false;rentPanel?.Hide();for(int i=modal.childCount-1;i>=0;i--){var o=modal.GetChild(i).gameObject;o.SetActive(false);Destroy(o);}modal.gameObject.SetActive(true);
             UIShape(modal,"Shade",0,0,1600,900,new Color(.015f,.035f,.06f,.93f),0,true);
             UIShape(modal,"Dialog",340,130,920,620,LightsOutStyle.Hex("122437"),24);
             UIText(modal,"Title",title,380,158,840,60,34,Amber);
@@ -303,9 +369,9 @@ namespace LightsOut
         public void Save()
         {
             if(Testing||!Application.isPlaying||Model==null)return;
-            var state=new SaveState{model=Model.ExportJson(),x=player.Position.x,y=player.Position.y};string json=JsonUtility.ToJson(state);
+            var state=new SaveState{career=Career.ExportJson(),x=player.Position.x,y=player.Position.y};string json=JsonUtility.ToJson(state);
             PlayerPrefs.SetString(SaveKey,json);PlayerPrefs.Save();
-            try{File.WriteAllText(Path.Combine(Application.persistentDataPath,"lightsout-movement-save.json"),json);}catch(IOException){}catch(UnauthorizedAccessException){}
+            try{File.WriteAllText(Path.Combine(Application.persistentDataPath,"lightsout-rent-save.json"),json);}catch(IOException){}catch(UnauthorizedAccessException){}
         }
         void OnApplicationQuit(){Save();}void OnApplicationPause(bool paused){if(paused)Save();}void OnDisable(){Save();}
         void OnDestroy(){pauseAction?.Dispose();treeAction?.Dispose();if(worldCamera)worldCamera.targetTexture=null;if(render){render.Release();Destroy(render);}}

@@ -16,6 +16,12 @@ The seven WAV files in `Assets/LightsOut/Audio/` were composed and synthesized s
 
 All files are PCM 16-bit at 48 kHz. Effects are mono; the music loop is stereo. `AudioManifest.json` records checksums, durations, and amplitude validation.
 
+### Roulette presentation audio and UI
+
+The roulette reuses the existing original switch, preparation, and reward effects through a separate audio source. `LightsOutAudio.cs` also synthesizes an original 90 Hz, 80 ms mono pulse at runtime with a short attack, exponential decay, and release envelope. It creates a non-streaming 48 kHz Unity AudioClip from PCM sample values; no external sound or new downloaded media asset is used. This pulse was authored specifically for this project on 2026-10-14 and is destroyed when the component is destroyed.
+
+The separate roulette popup, wheel sectors, pointer, rim lights, income ticket, and result animations are native Unity uGUI geometry and text authored in this project (`LightsOutRoulettePopup.cs`), rather than imported tutorial assets. The project retains the existing Noto Sans KR font and its license below. No new third-party asset license is introduced by this presentation.
+
 ## Noto Sans KR Regular
 
 - File: `Assets/LightsOut/Fonts/NotoSansKR-Regular.otf`

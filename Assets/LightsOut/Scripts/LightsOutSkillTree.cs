@@ -76,7 +76,7 @@ namespace LightsOut
             float breathe = .035f * Mathf.Sin(Time.unscaledTime * 2.1f);
             for (int i = 0; i < nodes.Length; i++)
             {
-                if (i != selected && !owner.Model.CanBuySkill(i)) continue;
+                if (i != selected && !owner.CanBuySkill(i)) continue;
                 Color c = BranchColors[i / 5];
                 c.a = (i == selected ? .16f : .08f) + breathe;
                 nodes[i].glow.color = c;
@@ -242,7 +242,7 @@ namespace LightsOut
                     if (value > 0) acquired++;
                     bool locked = s.PrerequisiteId >= 0 && model.SkillLevels[s.PrerequisiteId] < s.PrerequisiteLevel;
                     bool maxed = value >= s.MaxLevel;
-                    bool canBuy = model.CanBuySkill(id);
+                    bool canBuy = owner.CanBuySkill(id);
                     Color c = locked ? Locked : BranchColors[b];
                     nodes[id].outer.color = id == selected ? White : Alpha(c, maxed || canBuy ? 1 : .5f);
                     nodes[id].face.color = locked ? Hex("18232C") : Tint(Card, c, maxed ? .35f : .16f);
@@ -278,8 +278,8 @@ namespace LightsOut
             requirement.color = unlocked ? BranchColors[3] : Muted;
             price.text = completed ? "강화 완료" : LightsOutStyle.Format(model.GetSkillCost(selected));
             price.color = category;
-            buyButton.interactable = model.CanBuySkill(selected);
-            buyLabel.text = completed ? "최대 레벨 달성" : !unlocked ? "선행 스킬 필요" : !buyButton.interactable ? "재화가 부족합니다" : "스킬 강화  +";
+            buyButton.interactable = owner.CanBuySkill(selected);
+            buyLabel.text = completed ? "최대 레벨 달성" : !unlocked ? "선행 스킬 필요" : !buyButton.interactable ? (model.CanBuySkill(selected)?"월세 납부금 보호 중":"재화가 부족합니다") : "스킬 강화  +";
             BuyColors(category);
         }
 
