@@ -1,0 +1,69 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 56fa543bff8545aeaf9dd30a1c4c16bd, type: 3}
+  m_Name: LightsOutBalanceSettings
+  m_EditorClassIdentifier: Assembly-CSharp::LightsOut.LightsOutBalanceSettings
+  DayKeyframes:
+  - day: 1
+    columns: 20
+    floors: 2
+    duration: 80
+    rentMultiplier: 2.6
+  - day: 5
+    columns: 14
+    floors: 5
+    duration: 90
+    rentMultiplier: 2.6
+  - day: 10
+    columns: 9
+    floors: 12
+    duration: 100
+    rentMultiplier: 2.6
+  - day: 20
+    columns: 6
+    floors: 28
+    duration: 110
+    rentMultiplier: 2.6
+  - day: 40
+    columns: 4
+    floors: 60
+    duration: 120
+    rentMultiplier: 2.6
+  RoomWidth: 2.4
+  MaximumFloors: 4096
+  FloorsPerDayAfterLast: 2
+  SecondsPerDayAfterLast: 1
+  MaximumDuration: 150
+  ExtinguishSeconds:
+  - 1
+  - 0.8
+  - 0.65
+  - 0.5
+  - 0.35
+  - 0.2
+  - 0
+  SkillMinimumDays: 0100000005000000050000000a0000001e0000000a0000000c0000000f000000140000001e000000050000000a0000000f000000140000001e0000000f00000014000000190000001e000000280000000a0000001400000001000000010000000a000000
+  WorkHoldSeconds: 1.5
+  ComboWindowSeconds: 4
+  ComboThresholds: 01000000050000000a00000014000000
+  ComboMultipliers:
+  - 1
+  - 1.2
+  - 1.5
+  - 2
+  RouletteWeights:
+  - 0.37
+  - 0.6
+  - 0.03
+  AccessoryBaseCosts: 0300000004000000050000000500000006000000
+  AccessoryCostGrowth: 1.8
+  MaxAccessoryLevel: 5

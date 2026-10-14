@@ -50,17 +50,40 @@ namespace LightsOut
             new VerticalSkillDefinition(16,3,"자동 소등 속도",10,380,1.6,15,3,"자동 소등 주기 -8%/레벨 · 최대 80%"),
             new VerticalSkillDefinition(17,3,"자동 층 정전",5,1300,1.9,16,3,"자동 소등 30회마다 추가 1개 층 · 레벨별 추가효과 검토 중"),
             new VerticalSkillDefinition(18,3,"자동 연쇄",5,3600,1.9,17,2,"자동 소등에서 연쇄 발동 확률 +10%/레벨"),
-            new VerticalSkillDefinition(19,3,"완전 자동화",1,20000,1,18,3,"자동 소등 속도 2배 · 자동 연쇄 확률 +20%p")
+            new VerticalSkillDefinition(19,3,"완전 자동화",1,20000,1,18,3,"자동 소등 속도 2배 · 자동 연쇄 확률 +20%p"),
+            new VerticalSkillDefinition(20,2,"건물 가로 축소",5,450,1.9,10,2,"건물 가로 폭 -7%/레벨 · 최대 35%"),
+            new VerticalSkillDefinition(21,2,"수직 돌파",3,9000,2,12,3,"위로 8개 층 순간 상승 · 강화 시 거리 증가 및 재사용 시간 감소"),
+            new VerticalSkillDefinition(22,0,"소등 속도 강화",6,35,1.6,-1,0,"방 소등에 필요한 시간 단축 · 최종 레벨은 접촉 즉시 소등"),
+            new VerticalSkillDefinition(23,2,"상층 연동 소등",3,45,1.8,-1,0,"직접 소등 완료 시 같은 위치 위쪽 1개 층/레벨 함께 소등"),
+            new VerticalSkillDefinition(24,2,"층 완료 정전",3,180,1.8,11,2,"층 완료 시 위아래 인접층 1개 방/레벨 소등 · 최대 2회 전파")
         };
 
-        const int MaximumFloors=300, RoomsPerFloor=4, MaxPending=8192, PerTickBudget=256;
+        public const int MaximumFloors=4096, MaximumRooms=20;
+        const int MaxPending=8192, PerTickBudget=256;
         const double MaxMoney=1e15;
         static readonly string[] StageNames={"작은 사무실","사무동","대형 빌딩","복합 건물","야간 도시","도시 전력망"};
         static readonly int[] StageStarts={0,12,36,72,120,200};
         public event Action Changed;
         public event Action<VerticalExtinguishEvent> Extinguished;
         public int FloorCount { get { return floorCount; } }
-        public int FloorRooms { get { return RoomsPerFloor; } }
+        public int FloorRooms { get { return roomsPerFloor; } }
+        public int Combo { get; private set; }
+        public int PeakCombo { get; private set; }
+        public float ComboRemaining { get; private set; }
+        public float ComboRewardMultiplier { get { return LightsOutBalanceSettings.Shared.ComboMultiplierFor(Combo); } }
+        public float ExtinguishSeconds { get { return LightsOutBalanceSettings.Shared.ExtinguishSecondsForLevel(SkillLevels[22]); } }
+        public int LinkFloors { get { return SkillLevels[23]; } }
+        public float HoldSeconds { get { return Mathf.Clamp(LightsOutBalanceSettings.Shared.WorkHoldSeconds,.1f,10)+(accessories==null?0:accessories.HoldBonusSeconds); } }
+        public float WorkHoldSeconds { get { return HoldSeconds; } }
+        public int OpeningKeyCount { get { return accessories==null?0:accessories.KeyOpeningRooms; } }
+        public float RingChance { get { return accessories==null?0:accessories.RingChance; } }
+        public int RingRange { get { return accessories==null?0:accessories.RingRange; } }
+        public float BadgeBonusPerCombo { get { return accessories==null?0:accessories.BadgeBonusPerCombo; } }
+        public float BaseRoomWidth { get; private set; } = 2.4f;
+        public float WidthShrink { get { return .07f * SkillLevels[20]; } }
+        public float RoomWidth { get { return BaseRoomWidth * (1 - WidthShrink); } }
+        public float BuildingWidth { get { return roomsPerFloor * RoomWidth; } }
+        public float HalfWidth { get { return BuildingWidth * .5f; } }
         public double Money { get; private set; }
         public double PendingIncome { get; private set; }
         public bool RewardsDeferred { get; private set; }
@@ -81,11 +104,16 @@ namespace LightsOut
         public bool IsComplete { get { return ClearedFloors==floorCount; } }
         public bool CanGoHome { get { return IsComplete; } }
         public int PendingEventCount { get { return queue.Count; } }
-        public float MoveSpeed { get { return 4.8f*(1+.12f*SkillLevels[0]); } }
+        public float MoveSpeed { get { return 4.8f*(1+.12f*SkillLevels[0])*(1+Math.Min(Combo,20)*(accessories==null?0:accessories.ComboMovePerCount)); } }
         public float ExtinguishRadius { get { return .12f+.45f*SkillLevels[1]; } }
         public bool DashUnlocked { get { return SkillLevels[2]>0; } }
         public float DashDistance { get { return 5f+2f*SkillLevels[3]; } }
         public float DashCooldown { get { return Math.Max(2.6f,5f-.6f*Math.Max(0,SkillLevels[2]-1)); } }
+        public bool RiseUnlocked { get { return SkillLevels[21] > 0; } }
+        public int RiseFloors { get { return RiseUnlocked ? 8 + 4 * (SkillLevels[21] - 1) : 0; } }
+        public float RiseDistance { get { return RiseFloors * 1.8f; } }
+        public float RiseCooldown { get { return RiseUnlocked ? 14 - 2 * (SkillLevels[21] - 1) : 0; } }
+        public float RiseDuration { get { return .28f; } }
         public float CameraSpeedMultiplier { get { return ConsecutiveFloors>=2 ? 1+.15f*SkillLevels[13] : 1; } }
         public float ChainProbability { get { return ClampChance(SkillLevels[5]*.2f); } }
         public float VerticalProbability { get { return ClampChance(SkillLevels[10]*.15f+(SurgeRemaining>0?.25f:0)); } }
@@ -100,7 +128,9 @@ namespace LightsOut
         }
         public string StageName { get { return StageNames[StageIndex]; } }
 
-        int floorCount;
+        int floorCount,roomsPerFloor=4;
+        AccessoryEffects accessories;
+        bool openingKeysApplied,departureBonusApplied;
         bool[] on;
         int[] floorRemaining;
         uint randomState;
@@ -108,10 +138,10 @@ namespace LightsOut
         long nextActionId,nextSequence;
         int autoCursor;
         readonly List<Pending> queue=new List<Pending>();
-        enum PropagationKind { Contact, Chain, Vertical, WholeFloor, AutoBase }
+        enum PropagationKind { Contact, Chain, Vertical, WholeFloor, AutoBase, Linked }
         sealed class RootAction
         {
-            public long Id; public bool Automatic;
+            public long Id; public bool Automatic;public int CompletionWaves;
             public readonly HashSet<int> Visited=new HashSet<int>();
         }
         sealed class Pending
@@ -126,15 +156,19 @@ namespace LightsOut
             public readonly List<int> Floors=new List<int>();
         }
 
-        public LightsOutVerticalModel(int floors=300,bool deferRewards=false)
+        public LightsOutVerticalModel(int floors=300,bool deferRewards=false,float roomWidth=2.4f,int rooms=4)
         {
             if(floors<1||floors>MaximumFloors)throw new ArgumentOutOfRangeException("floors");
-            floorCount=floors;RewardsDeferred=deferRewards;Reset();
+            if(!ValidRoomWidth(roomWidth))throw new ArgumentOutOfRangeException("roomWidth");
+            if(!ValidRoomCount(rooms))throw new ArgumentOutOfRangeException("rooms");
+            floorCount=floors;roomsPerFloor=rooms;RewardsDeferred=deferRewards;BaseRoomWidth=roomWidth;Reset();
         }
-        public void Reset(int floors)
+        public void Reset(int floors,float roomWidth=2.4f,int rooms=4)
         {
             if(floors<1||floors>MaximumFloors)throw new ArgumentOutOfRangeException("floors");
-            floorCount=floors;Reset();
+            if(!ValidRoomWidth(roomWidth))throw new ArgumentOutOfRangeException("roomWidth");
+            if(!ValidRoomCount(rooms))throw new ArgumentOutOfRangeException("rooms");
+            floorCount=floors;roomsPerFloor=rooms;BaseRoomWidth=roomWidth;Reset();
         }
         public void Reset()
         {
@@ -145,19 +179,41 @@ namespace LightsOut
         }
         void RenewBuilding()
         {
-            on=new bool[floorCount*RoomsPerFloor];for(int i=0;i<on.Length;i++)on[i]=true;
-            floorRemaining=new int[floorCount];for(int i=0;i<floorCount;i++)floorRemaining[i]=RoomsPerFloor;
+            on=new bool[floorCount*roomsPerFloor];for(int i=0;i<on.Length;i++)on[i]=true;
+            floorRemaining=new int[floorCount];for(int i=0;i<floorCount;i++)floorRemaining[i]=roomsPerFloor;
             CurrentFloor=0;ClearedFloors=0;HighestClearedFloor=-1;
             SurgeRemaining=0;BlackoutCharge=0;ConsecutiveFloors=0;AutoFloorCharge=0;
             automaticAccumulator=0;lastFloorCompletion=-100;autoCursor=0;queue.Clear();
             PendingIncome=0;BuildingClosed=false;PendingSettled=false;
+            Combo=PeakCombo=0;ComboRemaining=0;openingKeysApplied=departureBonusApplied=false;
         }
         public bool StartNextRun()
-        { if(!IsComplete||(RewardsDeferred&&!PendingSettled))return false;return BeginBuilding(floorCount); }
-        public bool BeginBuilding(int floors)
+        { if(!IsComplete||(RewardsDeferred&&!PendingSettled))return false;return BeginBuilding(floorCount,BaseRoomWidth,roomsPerFloor); }
+        public bool BeginBuilding(int floors,float roomWidth=2.4f,int rooms=4)
         {
-            if(floors<1||floors>MaximumFloors||PendingIncome>0)return false;
-            floorCount=floors;RunNumber++;RenewBuilding();Notify();return true;
+            if(floors<1||floors>MaximumFloors||PendingIncome>0||!ValidRoomWidth(roomWidth)||!ValidRoomCount(rooms))return false;
+            floorCount=floors;roomsPerFloor=rooms;BaseRoomWidth=roomWidth;RunNumber++;RenewBuilding();Notify();return true;
+        }
+        public void SetAccessories(AccessoryEffects effects) { if(openingKeysApplied&&!BuildingClosed)return;accessories=effects;Notify(); }
+        public bool StartAccessoryEffects()
+        {
+            if(BuildingClosed||openingKeysApplied)return false;
+            openingKeysApplied=true;int keys=Math.Min(11,Math.Max(0,OpeningKeyCount));
+            for(int i=0;i<keys&&!IsComplete;i++)
+            {
+                int id=(int)(NextRandom()*on.Length),checkedCount=0;
+                while(!on[id]&&checkedCount<on.Length){id=(id+1)%on.Length;checkedCount++;}
+                if(checkedCount>=on.Length)break;
+                RootAction root=NewAction(true);root.Visited.Add(id);Batch batch=new Batch{Root=root};
+                Process(new Pending{Id=id,Root=root,Kind=PropagationKind.AutoBase,Due=clock},batch);Emit(batch);
+            }
+            Notify();return true;
+        }
+        public bool FinalizeDepartureBonus()
+        {
+            if(BuildingClosed||departureBonusApplied)return false;
+            departureBonusApplied=true;double bonus=PeakCombo*BadgeBonusPerCombo;
+            if(bonus>0)AddMoney(bonus);Notify();return true;
         }
         public void CloseBuilding()
         { if(BuildingClosed)return;BuildingClosed=true;queue.Clear();automaticAccumulator=0;Notify(); }
@@ -171,7 +227,7 @@ namespace LightsOut
         public bool TrySpend(double amount)
         { if(!Finite(amount)||amount<=0||amount>Money)return false;Money-=amount;Notify();return true; }
         public bool IsLightOn(int floor,int col)
-        { return ValidRoom(floor,col)&&on[floor*RoomsPerFloor+col]; }
+        { return ValidRoom(floor,col)&&on[floor*roomsPerFloor+col]; }
         public LightKind GetLightKind(int floor,int col) { return LightKind.Normal; }
         public int GetRemainingRooms(int floor) { return floor>=0&&floor<floorCount?floorRemaining[floor]:0; }
         public double GetRoomReward(int floor,bool automated=false)
@@ -180,9 +236,19 @@ namespace LightsOut
         public bool Contact(int floor,int col)
         {
             if(BuildingClosed||!IsLightOn(floor,col)||IsComplete)return false;
-            RootAction root=NewAction(false);int id=floor*RoomsPerFloor+col;root.Visited.Add(id);
+            RootAction root=NewAction(false);int id=floor*roomsPerFloor+col;root.Visited.Add(id);
+            // Reserve linked targets before normal propagation so their completion is immediate.
+            for(int step=1;step<=LinkFloors&&floor+step<floorCount;step++)
+            { int linked=(floor+step)*roomsPerFloor+col;if(on[linked])root.Visited.Add(linked); }
             Batch batch=new Batch{Root=root};
             Process(new Pending{Id=id,Due=clock,Root=root,Kind=PropagationKind.Contact},batch);
+            for(int step=1;step<=LinkFloors&&floor+step<floorCount;step++)
+                Process(new Pending{Id=(floor+step)*roomsPerFloor+col,Due=clock,Root=root,Kind=PropagationKind.Linked},batch);
+            if(Roll(RingChance))
+            {
+                int target=FindRingTarget(floor,col,root);
+                if(target>=0&&root.Visited.Add(target))Process(new Pending{Id=target,Due=clock,Root=root,Kind=PropagationKind.Linked},batch);
+            }
             Emit(batch);Notify();return true;
         }
 
@@ -232,7 +298,13 @@ namespace LightsOut
                 case 16:return "자동 주기 -"+(level*8)+"% (원래의 "+(100-level*8)+"%)";
                 case 17:return "자동 소등 30회마다 추가 1층 · 레벨별 추가효과 검토 중";
                 case 18:return "자동 연쇄 발동 "+(level*10)+"%";
-                default:return "자동 속도 ×2 · 자동 연쇄 확률 +20%p";
+                case 19:return "자동 속도 ×2 · 자동 연쇄 확률 +20%p";
+                case 20:return "건물 가로 폭 -"+(level*7)+"% (기본 폭의 "+(100-level*7)+"%)";
+                case 21:return "위로 "+(8+4*(level-1))+"개 층 순간 상승 · 재사용 "+(14-2*(level-1))+"초";
+                case 22:return LightsOutBalanceSettings.Shared.ExtinguishSecondsForLevel(level)<=0?"접촉 즉시 소등":"방 소등에 "+LightsOutBalanceSettings.Shared.ExtinguishSecondsForLevel(level).ToString("0.##")+"초 필요";
+                case 23:return "직접 소등 완료 시 같은 위치 위쪽 "+level+"개 층 즉시 소등";
+                case 24:return "층 완료 시 위아래 층 "+level+"개 방 소등 · 최대 2회 전파";
+                default:return string.Empty;
             }
         }
 
@@ -241,6 +313,7 @@ namespace LightsOut
             if(BuildingClosed||float.IsNaN(dt)||float.IsInfinity(dt)||dt<=0)return;
             dt=Math.Min(dt,60);clock+=dt;SessionSeconds=Math.Min(315360000f,SessionSeconds+dt);
             bool dirty=false;
+            if(ComboRemaining>0){ComboRemaining=Math.Max(0,ComboRemaining-dt);if(ComboRemaining==0){Combo=0;dirty=true;}}
             if(SurgeRemaining>0){SurgeRemaining=Math.Max(0,SurgeRemaining-dt);dirty=SurgeRemaining==0;}
             if(ConsecutiveFloors>0&&clock-lastFloorCompletion>3){ConsecutiveFloors=0;dirty=true;}
             if(IsComplete){if(dirty)Notify();return;}
@@ -268,10 +341,11 @@ namespace LightsOut
         RootAction NewAction(bool automatic) { return new RootAction{Id=++nextActionId,Automatic=automatic}; }
         void Process(Pending item,Batch batch)
         {
-            if(!on[item.Id])return;
-            int floor=item.Id/RoomsPerFloor,col=item.Id%RoomsPerFloor;
+            if(BuildingClosed||!on[item.Id])return;
+            int floor=item.Id/roomsPerFloor,col=item.Id%roomsPerFloor;
             on[item.Id]=false;floorRemaining[floor]--;TotalOff=Math.Min(9000000000000000L,TotalOff+1);
-            double reward=GetRoomReward(floor,item.Root.Automatic);AddMoney(reward);batch.Reward+=reward;batch.Ids.Add(item.Id);
+            Combo++;PeakCombo=Math.Max(PeakCombo,Combo);ComboRemaining=Mathf.Clamp(LightsOutBalanceSettings.Shared.ComboWindowSeconds,.1f,60);
+            double reward=GetRoomReward(floor,item.Root.Automatic)*ComboRewardMultiplier;AddMoney(reward);batch.Reward+=reward;batch.Ids.Add(item.Id);
             if(item.Kind==PropagationKind.Chain&&SkillLevels[9]>0)
             {
                 if(BlackoutCharge>=30){BlackoutCharge=0;ScheduleFloor(item.Root,floor,ChainInterval);}
@@ -289,11 +363,26 @@ namespace LightsOut
                     ConsecutiveFloors=clock-lastFloorCompletion<=3?ConsecutiveFloors+advance:advance;lastFloorCompletion=clock;
                     if(ConsecutiveFloors>=10&&SkillLevels[14]>0){SurgeRemaining=5;ConsecutiveFloors%=10;}
                 }
+                if(SkillLevels[24]>0&&item.Root.CompletionWaves<2)
+                {
+                    item.Root.CompletionWaves++;
+                    for(int direction=-1;direction<=1;direction+=2)
+                    {
+                        int adjacent=floor+direction;if(adjacent<0||adjacent>=floorCount)continue;
+                        int selected=0;
+                        for(int offset=0;offset<roomsPerFloor&&selected<SkillLevels[24];offset++)
+                        {
+                            int nextCol=(col+offset)%roomsPerFloor,target=adjacent*roomsPerFloor+nextCol;
+                            if(!on[target]||item.Root.Visited.Contains(target))continue;
+                            Schedule(item.Root,target,PropagationKind.WholeFloor,ChainInterval);selected++;
+                        }
+                    }
+                }
             }
             if(item.Root.Automatic&&SkillLevels[17]>0)
             {
                 AutoFloorCharge++;
-                if(AutoFloorCharge>=30){AutoFloorCharge-=30;int next=FindNextOn();if(next>=0)ScheduleFloor(item.Root,next/RoomsPerFloor,ChainInterval);}
+                if(AutoFloorCharge>=30){AutoFloorCharge-=30;int next=FindNextOn();if(next>=0)ScheduleFloor(item.Root,next/roomsPerFloor,ChainInterval);}
             }
             float chainChance=item.Root.Automatic?AutoChainProbability:ChainProbability;
             if(Roll(chainChance))
@@ -302,8 +391,8 @@ namespace LightsOut
                 if(target>=0)Schedule(item.Root,target,PropagationKind.Chain,ChainInterval);
                 if(Roll(SkillLevels[8]*.05f))
                 {
-                    Schedule(item.Root,(floor-1)*RoomsPerFloor+col,PropagationKind.Chain,ChainInterval*1.5);
-                    Schedule(item.Root,(floor+1)*RoomsPerFloor+col,PropagationKind.Chain,ChainInterval*1.5);
+                    Schedule(item.Root,(floor-1)*roomsPerFloor+col,PropagationKind.Chain,ChainInterval*1.5);
+                    Schedule(item.Root,(floor+1)*roomsPerFloor+col,PropagationKind.Chain,ChainInterval*1.5);
                 }
             }
             bool verticalEligible=!item.Root.Automatic||item.Kind!=PropagationKind.AutoBase;
@@ -312,7 +401,7 @@ namespace LightsOut
                 for(int step=1;step<=1+SkillLevels[12];step++)
                 {
                     int upper=floor+step;if(upper>=floorCount)break;
-                    Schedule(item.Root,upper*RoomsPerFloor+col,PropagationKind.Vertical,ChainInterval*step);
+                    Schedule(item.Root,upper*roomsPerFloor+col,PropagationKind.Vertical,ChainInterval*step);
                     if(Roll(SkillLevels[11]*.1f))ScheduleFloor(item.Root,upper,ChainInterval*step);
                 }
             }
@@ -323,9 +412,19 @@ namespace LightsOut
             for(int distance=1;distance<=range;distance++)
             {
                 int a=col+(leftFirst?-distance:distance),b=col+(leftFirst?distance:-distance);
-                if(a>=0&&a<RoomsPerFloor){int id=floor*RoomsPerFloor+a;if(on[id]&&!root.Visited.Contains(id))return id;}
-                if(b>=0&&b<RoomsPerFloor){int id=floor*RoomsPerFloor+b;if(on[id]&&!root.Visited.Contains(id))return id;}
+                if(a>=0&&a<roomsPerFloor){int id=floor*roomsPerFloor+a;if(on[id]&&!root.Visited.Contains(id))return id;}
+                if(b>=0&&b<roomsPerFloor){int id=floor*roomsPerFloor+b;if(on[id]&&!root.Visited.Contains(id))return id;}
             }
+            return -1;
+        }
+        int FindRingTarget(int floor,int col,RootAction root)
+        {
+            for(int distance=1;distance<=RingRange;distance++)
+                for(int direction=-1;direction<=1;direction+=2)
+                {
+                    int next=col+direction*distance;if(next<0||next>=roomsPerFloor)continue;
+                    int id=floor*roomsPerFloor+next;if(on[id]&&!root.Visited.Contains(id))return id;
+                }
             return -1;
         }
         int FindNextOn()
@@ -335,7 +434,7 @@ namespace LightsOut
             return -1;
         }
         void ScheduleFloor(RootAction root,int floor,double delay)
-        { if(floor<0||floor>=floorCount)return;for(int col=0;col<RoomsPerFloor;col++)Schedule(root,floor*RoomsPerFloor+col,PropagationKind.WholeFloor,delay); }
+        { if(floor<0||floor>=floorCount)return;for(int col=0;col<roomsPerFloor;col++)Schedule(root,floor*roomsPerFloor+col,PropagationKind.WholeFloor,delay); }
         void Schedule(RootAction root,int id,PropagationKind kind,double delay)
         {
             if(id<0||id>=on.Length||!on[id]||queue.Count>=MaxPending||root.Visited.Count>=on.Length||!root.Visited.Add(id))return;
@@ -366,77 +465,102 @@ namespace LightsOut
         bool Roll(float chance) { return chance>0&&NextRandom()<ClampChance(chance); }
         double NextRandom() { randomState^=randomState<<13;randomState^=randomState>>17;randomState^=randomState<<5;return randomState/4294967296.0; }
         static float ClampChance(float chance) { return Math.Max(0,Math.Min(1,chance)); }
-        bool ValidRoom(int floor,int col) { return floor>=0&&floor<floorCount&&col>=0&&col<RoomsPerFloor; }
+        bool ValidRoom(int floor,int col) { return floor>=0&&floor<floorCount&&col>=0&&col<roomsPerFloor; }
         void Notify() { if(Changed!=null)Changed(); }
 
         [Serializable] sealed class SavedPending
-        { public int id,kind;public double delay;public long action,sequence;public bool automated; }
+        { public int id,kind,waves;public double delay;public long action,sequence;public bool automated; }
         [Serializable] sealed class SaveState
         {
             public int version,run;public double money,earned,clock,automaticAccumulator,lastFloorCompletion;
             public long off,action,sequence;public uint random;
             public float session,surge;public int blackout,consecutive,autoFloor,autoCursor;
             public int[] skills;public bool[] lights;public List<SavedPending> pending;
-            public int floors;public bool deferred,closed,pendingSettled;public double pendingIncome;
+            public int floors,rooms,combo,peakCombo;public float roomWidth,comboRemaining;public bool deferred,closed,pendingSettled,openingKeysApplied,departureBonusApplied;public double pendingIncome;
+            public float holdBonusSeconds,comboMovePerCount,ringChance,badgeBonusPerCombo;public int keyOpeningRooms,ringRange;
         }
         public string ExportJson()
         {
             List<SavedPending> pending=new List<SavedPending>(queue.Count);
-            foreach(Pending item in queue)pending.Add(new SavedPending{id=item.Id,kind=(int)item.Kind,delay=Math.Max(0,item.Due-clock),action=item.Root.Id,sequence=item.Sequence,automated=item.Root.Automatic});
-            return JsonUtility.ToJson(new SaveState{version=2,run=RunNumber,money=Money,earned=TotalEarned,off=TotalOff,clock=clock,
+            foreach(Pending item in queue)pending.Add(new SavedPending{id=item.Id,kind=(int)item.Kind,waves=item.Root.CompletionWaves,delay=Math.Max(0,item.Due-clock),action=item.Root.Id,sequence=item.Sequence,automated=item.Root.Automatic});
+            return JsonUtility.ToJson(new SaveState{version=4,run=RunNumber,money=Money,earned=TotalEarned,off=TotalOff,clock=clock,
                 action=nextActionId,sequence=nextSequence,random=randomState,session=SessionSeconds,surge=SurgeRemaining,blackout=BlackoutCharge,
                 consecutive=ConsecutiveFloors,autoFloor=AutoFloorCharge,autoCursor=autoCursor,automaticAccumulator=automaticAccumulator,
                 lastFloorCompletion=lastFloorCompletion,skills=SkillLevels,lights=on,pending=pending,
-                floors=floorCount,deferred=RewardsDeferred,closed=BuildingClosed,pendingSettled=PendingSettled,pendingIncome=PendingIncome});
+                floors=floorCount,rooms=roomsPerFloor,roomWidth=BaseRoomWidth,deferred=RewardsDeferred,closed=BuildingClosed,pendingSettled=PendingSettled,pendingIncome=PendingIncome,
+                combo=Combo,peakCombo=PeakCombo,comboRemaining=ComboRemaining,openingKeysApplied=openingKeysApplied,departureBonusApplied=departureBonusApplied,
+                holdBonusSeconds=accessories==null?0:accessories.HoldBonusSeconds,comboMovePerCount=accessories==null?0:accessories.ComboMovePerCount,
+                keyOpeningRooms=OpeningKeyCount,ringChance=RingChance,ringRange=RingRange,badgeBonusPerCombo=BadgeBonusPerCombo});
         }
         public bool ImportJson(string json)
         {
             if(string.IsNullOrEmpty(json)||json.Length>2000000)return false;SaveState s;
             try{s=JsonUtility.FromJson<SaveState>(json);}catch(Exception){return false;}
-            int savedFloors=s==null?0:(s.floors==0?MaximumFloors:s.floors);
-            if(s==null||s.version!=2||s.run<1||s.run>=1000000000||!Finite(s.money)||s.money<0||s.money>MaxMoney||
+            int savedFloors=s==null?0:(s.floors==0&&s.version<4?300:s.floors);
+            int savedRooms=s==null?0:(s.version<4?4:s.rooms);
+            float savedRoomWidth=s==null?0:(s.version==2?2.4f:s.roomWidth);
+            int skillCount=s==null||s.skills==null?0:s.skills.Length;
+            if(s==null||(s.version!=2&&s.version!=3&&s.version!=4)||!ValidRoomWidth(savedRoomWidth)||!ValidRoomCount(savedRooms)||s.run<1||s.run>=1000000000||!Finite(s.money)||s.money<0||s.money>MaxMoney||
                 !Finite(s.earned)||s.earned<s.money||s.earned>MaxMoney||s.off<0||s.off>9000000000000000L||
                 !Finite(s.clock)||s.clock<0||!Finite(s.automaticAccumulator)||s.automaticAccumulator<0||s.automaticAccumulator>10000||
                 !Finite(s.lastFloorCompletion)||s.lastFloorCompletion>s.clock||!Finite(s.session)||s.session<0||s.session>315360000||
                 !Finite(s.surge)||s.surge<0||s.surge>5||s.blackout<0||s.blackout>30||savedFloors<1||savedFloors>MaximumFloors||s.consecutive<0||s.consecutive>savedFloors||
-                s.autoFloor<0||s.autoFloor>=30||s.autoCursor<0||s.autoCursor>=savedFloors*RoomsPerFloor||s.action<0||s.sequence<0||
-                s.skills==null||s.skills.Length!=Skills.Length||s.lights==null||s.lights.Length!=savedFloors*RoomsPerFloor||
+                s.autoFloor<0||s.autoFloor>=30||s.autoCursor<0||s.autoCursor>=savedFloors*savedRooms||s.action<0||s.sequence<0||
+                (s.version==2?skillCount!=20:s.version==3?skillCount!=22:skillCount!=24&&skillCount!=Skills.Length)||s.lights==null||s.lights.Length!=savedFloors*savedRooms||
                 s.pending==null||s.pending.Count>MaxPending||!Finite(s.pendingIncome)||s.pendingIncome<0||s.pendingIncome>MaxMoney||
                 (!s.deferred&&(s.pendingIncome!=0||s.pendingSettled))||(s.pendingSettled&&(!s.closed||s.pendingIncome!=0))||
                 (s.closed&&s.pending.Count>0))return false;
+            if(s.version<4)
+            {
+                s.combo=s.peakCombo=0;s.comboRemaining=0;s.openingKeysApplied=s.departureBonusApplied=false;
+                s.holdBonusSeconds=s.comboMovePerCount=s.ringChance=s.badgeBonusPerCombo=0;s.keyOpeningRooms=s.ringRange=0;
+            }
+            if(s.combo<0||s.peakCombo<s.combo||!Finite(s.comboRemaining)||s.comboRemaining<0||s.comboRemaining>60||
+                (s.combo==0?s.comboRemaining!=0:s.comboRemaining<=0)||
+                !InRange(s.holdBonusSeconds,0,30)||!InRange(s.comboMovePerCount,0,1)||s.keyOpeningRooms<0||s.keyOpeningRooms>100||
+                !InRange(s.ringChance,0,2)||s.ringRange<0||s.ringRange>20||!InRange(s.badgeBonusPerCombo,0,100))return false;
+            int[] savedSkills=new int[Skills.Length];Array.Copy(s.skills,savedSkills,s.skills.Length);
             for(int i=0;i<Skills.Length;i++)
-            { if(s.skills[i]<0||s.skills[i]>Skills[i].MaxLevel)return false;int p=Skills[i].PrerequisiteId;if(s.skills[i]>0&&p>=0&&s.skills[p]<Skills[i].PrerequisiteLevel)return false; }
+            { if(savedSkills[i]<0||savedSkills[i]>Skills[i].MaxLevel)return false;int p=Skills[i].PrerequisiteId;if(savedSkills[i]>0&&p>=0&&savedSkills[p]<Skills[i].PrerequisiteLevel)return false; }
             double minimumPending=0;
             int currentOff=0;
-            for(int i=0;i<s.lights.Length;i++)if(!s.lights[i]){minimumPending+=5+(i/RoomsPerFloor)*.125;currentOff++;}
-            if(s.off<currentOff||s.pendingIncome>minimumPending*2+.000001||
+            for(int i=0;i<s.lights.Length;i++)if(!s.lights[i]){minimumPending+=5+(i/savedRooms)*.125;currentOff++;}
+            double maximumPending=minimumPending*2*(s.version<4?1:LightsOutBalanceSettings.Shared.MaximumComboMultiplier)+(s.departureBonusApplied?s.peakCombo*s.badgeBonusPerCombo:0);
+            if(s.off<currentOff||s.peakCombo>currentOff||s.pendingIncome>maximumPending+.000001||
                 (s.deferred&&!s.pendingSettled&&s.pendingIncome+.000001<minimumPending))return false;
             Dictionary<long,bool> origins=new Dictionary<long,bool>();
+            Dictionary<long,int> waves=new Dictionary<long,int>();
             foreach(SavedPending item in s.pending)
             {
-                if(item==null||item.id<0||item.id>=s.lights.Length||item.kind<0||item.kind>4||!Finite(item.delay)||item.delay<0||item.delay>60||
+                if(item==null||item.id<0||item.id>=s.lights.Length||item.kind<0||item.kind>(s.version<4?4:5)||item.waves<0||item.waves>2||!Finite(item.delay)||item.delay<0||item.delay>60||
                     item.action<1||item.action>s.action||item.sequence<0||item.sequence>s.sequence)return false;
                 bool origin;if(origins.TryGetValue(item.action,out origin)&&origin!=item.automated)return false;origins[item.action]=item.automated;
+                int wave;if(waves.TryGetValue(item.action,out wave)&&wave!=item.waves)return false;waves[item.action]=item.waves;
             }
-            floorCount=savedFloors;RewardsDeferred=s.deferred;BuildingClosed=s.closed;PendingSettled=s.pendingSettled;PendingIncome=s.pendingIncome;
-            on=s.lights;SkillLevels=s.skills;Money=s.money;TotalEarned=s.earned;TotalOff=s.off;clock=s.clock;SessionSeconds=s.session;
+            floorCount=savedFloors;roomsPerFloor=savedRooms;BaseRoomWidth=savedRoomWidth;RewardsDeferred=s.deferred;BuildingClosed=s.closed;PendingSettled=s.pendingSettled;PendingIncome=s.pendingIncome;
+            on=s.lights;SkillLevels=savedSkills;Money=s.money;TotalEarned=s.earned;TotalOff=s.off;clock=s.clock;SessionSeconds=s.session;
             RunNumber=s.run;nextActionId=s.action;nextSequence=s.sequence;randomState=s.random==0?97193711:s.random;
             SurgeRemaining=s.surge;BlackoutCharge=s.blackout;ConsecutiveFloors=s.consecutive;AutoFloorCharge=s.autoFloor;
+            Combo=s.combo;PeakCombo=s.peakCombo;ComboRemaining=s.comboRemaining;openingKeysApplied=s.openingKeysApplied;departureBonusApplied=s.departureBonusApplied;
+            accessories=new AccessoryEffects(s.holdBonusSeconds,s.comboMovePerCount,s.keyOpeningRooms,s.ringChance,s.ringRange,s.badgeBonusPerCombo);
             autoCursor=s.autoCursor;automaticAccumulator=s.automaticAccumulator;lastFloorCompletion=s.lastFloorCompletion;
             floorRemaining=new int[floorCount];ClearedFloors=0;HighestClearedFloor=-1;
             for(int f=0;f<floorCount;f++)
-            { for(int c=0;c<RoomsPerFloor;c++)if(on[f*RoomsPerFloor+c])floorRemaining[f]++;if(floorRemaining[f]==0){ClearedFloors++;HighestClearedFloor=f;} }
+            { for(int c=0;c<roomsPerFloor;c++)if(on[f*roomsPerFloor+c])floorRemaining[f]++;if(floorRemaining[f]==0){ClearedFloors++;HighestClearedFloor=f;} }
             CurrentFloor=0;while(CurrentFloor<floorCount-1&&floorRemaining[CurrentFloor]==0)CurrentFloor++;
             queue.Clear();Dictionary<long,RootAction> roots=new Dictionary<long,RootAction>();
             foreach(SavedPending item in s.pending)
             {
                 if(!on[item.id]||IsComplete)continue;RootAction root;
-                if(!roots.TryGetValue(item.action,out root)){root=new RootAction{Id=item.action,Automatic=item.automated};roots.Add(root.Id,root);}
+                if(!roots.TryGetValue(item.action,out root)){root=new RootAction{Id=item.action,Automatic=item.automated,CompletionWaves=item.waves};roots.Add(root.Id,root);}
                 if(!root.Visited.Add(item.id))continue;
                 Push(new Pending{Id=item.id,Root=root,Kind=(PropagationKind)item.kind,Due=clock+item.delay,Sequence=item.sequence});
             }
             Notify();return true;
         }
         static bool Finite(double value) { return !double.IsNaN(value)&&!double.IsInfinity(value); }
+        static bool ValidRoomWidth(float value) { return Finite(value)&&value>=1.2f&&value<=8f; }
+        static bool ValidRoomCount(int value) { return value>=2&&value<=MaximumRooms; }
+        static bool InRange(double value,double minimum,double maximum) { return Finite(value)&&value>=minimum&&value<=maximum; }
     }
 }

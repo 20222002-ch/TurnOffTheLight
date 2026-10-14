@@ -9,7 +9,6 @@ namespace LightsOut
     public sealed class LightsOutRoulettePopup : MonoBehaviour
     {
         enum Phase { Hidden, Opening, Ready, Preparing, Accelerating, Racing, Braking, Revealing, Result }
-        const float SectorAngle = 360f / LightsOutRentModel.RouletteSectors;
         static readonly Color Ink = LightsOutStyle.Hex("071321"), Panel = LightsOutStyle.Hex("0D2031"), Card = LightsOutStyle.Hex("132A3E");
         static readonly Color Cream = LightsOutStyle.Hex("F5EFDA"), Muted = LightsOutStyle.Hex("8DA6BA"), Gold = LightsOutStyle.Hex("F6C96D"), Mint = LightsOutStyle.Hex("8DE7C5"), Red = LightsOutStyle.Hex("F6928A");
 
@@ -24,6 +23,8 @@ namespace LightsOut
         readonly LightsOutShape[] rimLights = new LightsOutShape[32];
         readonly LightsOutShape[] rays = new LightsOutShape[16];
         TMP_Text status, hub, stakeLabel, payoutLabel, resultLabel, explanation, startLabel, backLabel, stakeTicketLabel;
+        TMP_Text doubleOdds, lossOdds, jackpotOdds;
+        readonly RectTransform[] slotLabels = new RectTransform[21];
         UnityEngine.UI.Button startButton, backButton;
         Vector2 windowHome;
         float angle, pointerKick, tickTime, atmosphere;
@@ -43,6 +44,37 @@ namespace LightsOut
         { return slot < 0 || slot > 20 ? -1 : slot < 10 ? slot * 2 : slot < 20 ? (slot - 10) * 2 + 1 : 20; }
         public static int SlotForVisualIndex(int visualIndex)
         { return visualIndex < 0 || visualIndex > 20 ? -1 : visualIndex < 20 ? visualIndex % 2 == 0 ? visualIndex / 2 : 10 + visualIndex / 2 : 20; }
+        public static float WidthForVisualIndex(int visualIndex) => (float)LightsOutRentModel.RouletteProbabilityForSlot(SlotForVisualIndex(visualIndex))*360;
+        public static float StartAngleForVisualIndex(int visualIndex)
+        {
+            float start=-WidthForVisualIndex(0)*.5f;
+            for(int i=0;i<visualIndex;i++)start+=WidthForVisualIndex(i);
+            return start;
+        }
+        public static float AngleForSlot(int slot)
+        {
+            int visual=VisualIndexForSlot(slot);
+            return Mathf.Repeat(StartAngleForVisualIndex(visual)+WidthForVisualIndex(visual)*.5f,360);
+        }
+        public static int VisualIndexAtAngle(float angle)
+        {
+            float at=Mathf.Repeat(angle+WidthForVisualIndex(0)*.5f,360);
+            for(int i=0;i<21;i++){float width=WidthForVisualIndex(i);if(at<width)return i;at-=width;}
+            return 20;
+        }
+        void RefreshOdds()
+        {
+            doubleOdds.text=(LightsOutRentModel.RouletteProbabilityForMultiplier(2)*100).ToString("0.##")+"%";
+            lossOdds.text=(LightsOutRentModel.RouletteProbabilityForMultiplier(0)*100).ToString("0.##")+"%";
+            jackpotOdds.text=(LightsOutRentModel.RouletteProbabilityForMultiplier(10)*100).ToString("0.##")+"%";
+            for(int i=0;i<21;i++)
+            {
+                float center=AngleForSlot(SlotForVisualIndex(i)),a=(90-center)*Mathf.Deg2Rad;
+                slotLabels[i].anchoredPosition=new Vector2(Mathf.Cos(a),Mathf.Sin(a))*181;
+                slotLabels[i].localRotation=Quaternion.Euler(0,0,-center);
+            }
+            wheelGraphic.SetVerticesDirty();
+        }
 
         public void Initialize(LightsOutVerticalGame game, Action dismissed)
         {
@@ -57,6 +89,7 @@ namespace LightsOut
             var career = owner.Career;
             if (career.SettlementResolved && !career.RouletteUsed) return;
             stake = career.LastShiftIncome;
+            RefreshOdds();
             outcomeRevealed = false; outcomeColor = Gold; atmosphere = 0;
             wheelGraphic.SelectedVisualIndex = -1;
             halo.color = Alpha(Gold, .08f); halo.rectTransform.localScale = Vector3.one; ripple.color = Color.clear;
@@ -92,7 +125,7 @@ namespace LightsOut
             overlayGroup.alpha = 1; window.anchoredPosition = windowHome; window.localScale = Vector3.one;
             if (savedResult)
             {
-                SetAngle(VisualIndexForSlot(owner.Career.LastRouletteSlot) * SectorAngle);
+                SetAngle(AngleForSlot(owner.Career.LastRouletteSlot));
                 RevealResult(); phase = Phase.Result;
             }
             else { phase = Phase.Ready; status.text = "수입을 걸고 돌릴 준비가 됐습니다"; }
@@ -134,7 +167,7 @@ namespace LightsOut
             }
             flyingStake.gameObject.SetActive(false);
             hub.text = "???"; hubRect.localScale = Vector3.one;
-            start = angle; lastSector = Mathf.FloorToInt(angle / SectorAngle); tickTime = Time.unscaledTime;
+            start = angle; lastSector = VisualIndexAtAngle(angle); tickTime = Time.unscaledTime;
             phase = Phase.Accelerating; status.text = "회전 시작";
             elapsed = 0;
             while (elapsed < .75f)
@@ -153,8 +186,7 @@ namespace LightsOut
                 yield return null;
             }
             SetAngle(start - 1056); start = angle;
-            int visualIndex = VisualIndexForSlot(savedSlot);
-            float target = visualIndex * SectorAngle;
+            float target = AngleForSlot(savedSlot);
             float distance = Mathf.Repeat(start - target, 360) + 1080;
             phase = Phase.Braking; status.text = "서서히 멈추고 있습니다";
             elapsed = 0;
@@ -182,6 +214,9 @@ namespace LightsOut
                 ripple.color = Alpha(outcomeColor, .25f * (1 - u));
                 window.localScale = Vector3.one * (1 + .008f * Mathf.Sin(u * Mathf.PI) * Mathf.Sin(u * Mathf.PI * 3));
                 hubRect.localScale = Vector3.one * (1 + .11f * Mathf.Sin(u * Mathf.PI));
+                int multiplier=owner.Career.LastRouletteMultiplier;
+                payoutLabel.text=LightsOutStyle.Format(owner.Career.LastSettledIncome*(1-Mathf.Pow(1-u,3)));
+                if(multiplier==0){stakeLabel.text=LightsOutStyle.Format(stake*(1-u));backdrop.color=Alpha(Color.Lerp(Ink,Red,Mathf.Sin(u*Mathf.PI)*.2f),.86f);}
                 if (owner.Career.LastRouletteMultiplier == 10)
                     for (int i = 0; i < rays.Length; i++)
                     {
@@ -191,6 +226,7 @@ namespace LightsOut
                 yield return null;
             }
             window.localScale = Vector3.one; hubRect.localScale = Vector3.one; ripple.color = Color.clear;
+            payoutLabel.text=LightsOutStyle.Format(owner.Career.LastSettledIncome);
             for (int i = 0; i < rays.Length; i++) rays[i].color = Color.clear;
             phase = Phase.Result; RefreshButtons();
         }
@@ -200,7 +236,7 @@ namespace LightsOut
             var career = owner.Career; int multiplier = career.LastRouletteMultiplier;
             outcomeRevealed = true; outcomeColor = multiplier == 0 ? Red : multiplier == 10 ? Gold : Mint;
             wheelGraphic.SelectedVisualIndex = VisualIndexForSlot(career.LastRouletteSlot);
-            hub.text = "×" + multiplier; hub.color = outcomeColor;
+            hub.text = multiplier==0?"NOTHING":"×" + multiplier; hub.color = outcomeColor;
             payoutLabel.text = LightsOutStyle.Format(career.LastSettledIncome); payoutLabel.color = outcomeColor;
             resultLabel.text = multiplier == 0 ? "이번 근무 수입을 잃었습니다" : multiplier == 10 ? "열 배의 퇴근 보너스!" : "이번 근무 수입이 두 배가 됐습니다";
             resultLabel.color = outcomeColor;
@@ -221,7 +257,7 @@ namespace LightsOut
                 int behind = (head - i + rimLights.Length) % rimLights.Length;
                 rimLights[i].color = Color.Lerp(LightsOutStyle.Hex("2E4150"), Gold, behind < 5 ? 1 - behind * .16f : .16f + .12f * pulse);
             }
-            int sector = Mathf.FloorToInt(angle / SectorAngle);
+            int sector = VisualIndexAtAngle(angle);
             if (ticks && sector != lastSector && Time.unscaledTime - tickTime >= .055f)
             {
                 owner.PlayRouletteCue(0, Mathf.Lerp(.72f, 1.4f, speed), Mathf.Lerp(.26f, .14f, speed));
@@ -291,9 +327,7 @@ namespace LightsOut
             wheelGraphic = wheel.gameObject.AddComponent<LightsOutPopupRouletteWheel>(); wheelGraphic.raycastTarget = false;
             for (int i = 0; i < 21; i++)
             {
-                float a = (90 - i * SectorAngle) * Mathf.Deg2Rad;
-                var label = CenterRect(wheel, "VisualSlot" + i, 53, 34, new Vector2(Mathf.Cos(a), Mathf.Sin(a)) * 181);
-                label.localRotation = Quaternion.Euler(0, 0, -i * SectorAngle);
+                var label = CenterRect(wheel, "VisualSlot" + i, 53, 34, Vector2.zero);slotLabels[i]=label;
                 var text = label.gameObject.AddComponent<TextMeshProUGUI>();
                 StyleText(text, i == 20 ? "×10" : i % 2 == 0 ? "×2" : "×0", 22, i == 20 ? Ink : Cream, FontStyles.Bold, TextAlignmentOptions.Center);
             }
@@ -322,16 +356,16 @@ namespace LightsOut
             Box(window, "StakeCard", 615, 155, 500, 106, Card, 12);
             Text(window, "StakeCaption", "이번 근무에서 번 돈", 637, 166, 450, 29, 18, Muted);
             stakeLabel = Text(window, "StakeAmount", "₩ 0", 636, 202, 455, 46, 33, Cream, FontStyles.Bold);
-            OddsRow("Double", 280, Mint, "×2", "수입 두 배", "10 / 21  ·  47.62%");
-            OddsRow("Lose", 365, Red, "×0", "이번 수입 전액 손실", "10 / 21  ·  47.62%");
-            OddsRow("Jackpot", 450, Gold, "×10", "수입 열 배", "1 / 21  ·  4.76%");
+            doubleOdds=OddsRow("Double", 280, Mint, "×2", "수입 두 배", "37%");
+            lossOdds=OddsRow("Lose", 365, Red, "×0", "NOTHING · 이번 수입 손실", "60%");
+            jackpotOdds=OddsRow("Jackpot", 450, Gold, "×10", "수입 열 배", "3%");
             Box(window, "PayoutCard", 615, 550, 500, 123, Card, 12);
             resultLabel = Text(window, "ResultCaption", "이번 근무의 수입만 걸립니다", 635, 558, 457, 28, 18, Muted);
             payoutLabel = Text(window, "PayoutAmount", "?", 635, 588, 457, 44, 33, Cream, FontStyles.Bold);
             explanation = Text(window, "ResultExplanation", "", 635, 636, 457, 31, 13, Muted);
             startButton = ActionButton("StartRouletteButton", "이번 수입 걸고 돌리기", 45, 695, 520, 56, Gold, Ink, () => TrySpin(), out startLabel);
             backButton = ActionButton("BackToSettlementButton", "정산으로 돌아가기", 615, 695, 500, 56, Card, Cream, () => TryClose(), out backLabel);
-            Text(window, "RouletteFooter", "21칸의 넓이와 확률은 동일합니다.  ·  룰렛 진행 중에는 정산 선택이 잠깐 멈춥니다.", 35, 753, 1090, 23, 13, Muted, FontStyles.Normal, TextAlignmentOptions.Center);
+            Text(window, "RouletteFooter", "칸의 넓이는 실제 당첨 확률을 반영합니다.  ·  룰렛 진행 중에는 정산 선택이 잠깐 멈춥니다.", 35, 753, 1090, 23, 13, Muted, FontStyles.Normal, TextAlignmentOptions.Center);
             flyingStake = Rect(window, "StakeTransferTicket", 748, 189, 220, 58);
             flyingStake.pivot = Vector2.one * .5f; flyingStake.anchoredPosition += new Vector2(110, -29);
             flyingStakeGroup = flyingStake.gameObject.AddComponent<CanvasGroup>(); flyingStakeGroup.blocksRaycasts = false;
@@ -340,13 +374,13 @@ namespace LightsOut
             flyingStake.gameObject.SetActive(false);
         }
 
-        void OddsRow(string name, float y, Color accent, string multiplier, string caption, string odds)
+        TMP_Text OddsRow(string name, float y, Color accent, string multiplier, string caption, string odds)
         {
             Box(window, name + "Odds", 615, y, 500, 74, Card, 10);
             Box(window, name + "Accent", 615, y, 4, 74, accent, 2);
             Text(window, name + "Multiplier", multiplier, 633, y + 9, 88, 54, 32, accent, FontStyles.Bold, TextAlignmentOptions.Center);
             Text(window, name + "Caption", caption, 738, y + 7, 351, 28, 19, Cream, FontStyles.Bold);
-            Text(window, name + "Odds", odds, 738, y + 39, 351, 26, 17, accent);
+            return Text(window, name + "OddsText", odds, 738, y + 39, 351, 26, 17, accent);
         }
 
         UnityEngine.UI.Button ActionButton(string name, string label, float x, float y, float w, float h, Color face, Color foreground, UnityEngine.Events.UnityAction action, out TMP_Text caption)
@@ -402,12 +436,13 @@ namespace LightsOut
         protected override void OnPopulateMesh(UnityEngine.UI.VertexHelper helper)
         {
             helper.Clear(); Rect rect = GetPixelAdjustedRect();
-            float outer = Mathf.Min(rect.width, rect.height) * .5f, inner = outer * .28f, step = Mathf.PI * 2 / 21;
+            float outer = Mathf.Min(rect.width, rect.height) * .5f, inner = outer * .28f;
             for (int slot = 0; slot < 21; slot++)
             {
                 Color fill = LightsOutStyle.Hex(slot == 20 ? "ECC05D" : slot % 2 == 0 ? "216B62" : "733943");
                 if (slot == selectedVisualIndex) fill = Color.Lerp(fill, LightsOutStyle.Hex("F5EFDA"), .4f);
-                float start = Mathf.PI * .5f - slot * step + step * .5f - .006f, arc = step - .012f;
+                float start = (90-LightsOutRoulettePopup.StartAngleForVisualIndex(slot))*Mathf.Deg2Rad-.006f;
+                float arc=Mathf.Max(0,LightsOutRoulettePopup.WidthForVisualIndex(slot)*Mathf.Deg2Rad-.012f);
                 for (int segment = 0; segment < 8; segment++)
                 {
                     float a = start - arc * segment / 8, b = start - arc * (segment + 1) / 8;

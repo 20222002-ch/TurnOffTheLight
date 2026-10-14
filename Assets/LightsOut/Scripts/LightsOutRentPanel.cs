@@ -11,7 +11,7 @@ namespace LightsOut
         LightsOutVerticalGame owner;
         RectTransform panel;
         LightsOutRoulettePopup popup;
-        TMP_Text heading, subheading, stage, phase, rent, wallet, income, attempts, decision, rentAdvice, result, summaryAmount, summaryCaption, keepLabel, spinLabel, payLabel, nextLabel, footer;
+        TMP_Text heading, subheading, stage, phase, rent, wallet, income, attempts, decision, rentAdvice, result, summaryAmount, summaryCaption, keepLabel, spinLabel, payLabel, nextLabel, footer, rouletteDescription;
         readonly LightsOutShape[] pips = new LightsOutShape[5];
         readonly TMP_Text[] pipNumbers = new TMP_Text[5];
         UnityEngine.UI.Button keepButton, spinButton, payButton, upgradeButton, nextButton, restartButton;
@@ -79,10 +79,10 @@ namespace LightsOut
             Box(panel, "LedgerBorder", 38, 156, 510, 637, LightsOutStyle.Hex("365269"), 14);
             Box(panel, "LedgerFace", 40, 158, 506, 633, Panel, 12);
             Text(panel, "LedgerHeading", "월세 장부", 65, 181, 220, 42, 25, Cream, FontStyles.Bold);
-            stage = Text(panel, "Stage", "1단계", 284, 181, 235, 42, 23, Amber, FontStyles.Bold, TextAlignmentOptions.Right);
+            stage = Text(panel, "Stage", "DAY 1", 284, 181, 235, 42, 23, Amber, FontStyles.Bold, TextAlignmentOptions.Right);
             phase = Text(panel, "Phase", "퇴근", 65, 230, 450, 32, 17, Muted);
             Box(panel, "RentCard", 63, 280, 462, 103, Card, 10);
-            Text(panel, "RentCaption", "이번 단계의 월세", 82, 288, 415, 30, 18, Muted);
+            Text(panel, "RentCaption", "이번 DAY의 월세", 82, 288, 415, 30, 18, Muted);
             rent = Text(panel, "RentDue", "₩ 0", 81, 327, 420, 47, 35, Amber, FontStyles.Bold);
             Text(panel, "WalletCaption", "보유금", 67, 411, 205, 33, 20, Muted);
             wallet = Text(panel, "Wallet", "₩ 0", 236, 400, 277, 51, 31, Cream, FontStyles.Bold, TextAlignmentOptions.Right);
@@ -112,7 +112,7 @@ namespace LightsOut
             Text(panel,"ReceiveTitle","그대로 받기  ×1",620,545,405,42,25,Mint,FontStyles.Bold);
             Text(panel,"ReceiveDescription","이번 수입을 보유금에 더합니다.\n정산 후 월세 납부와 강화가 가능합니다.",620,598,405,66,18,Muted);
             Text(panel,"RouletteTitle","퇴근 룰렛",1087,545,420,42,25,Amber,FontStyles.Bold);
-            Text(panel,"RouletteDescription","×2 10칸 · ×0 10칸 · ×10 1칸\n별도 룰렛 창에서 수입을 걸고 돌립니다.",1087,598,420,66,18,Muted);
+            rouletteDescription=Text(panel,"RouletteDescription","",1087,598,420,66,18,Muted);
 
             keepButton = ActionButton("KeepIncomeButton", "그대로 받기  ×1", 596, 718, 427, 55, Card, Cream, Keep, out keepLabel);
             spinButton = ActionButton("RollIncomeButton", "룰렛 창 열기 →", 1065, 718, 469, 55, Amber, Ink, Spin, out spinLabel);
@@ -136,7 +136,8 @@ namespace LightsOut
             double money = career.Work.Money;
             heading.text = bankrupt ? "월세를 갚지 못했습니다" : "퇴근 정산";
             subheading.text = bankrupt ? "5번의 근무가 끝났습니다. 다음에는 더 빠르게, 더 신중하게." : "먼저 월세를 갚을까요, 다음 근무를 위해 강화할까요?";
-            stage.text = career.Stage + "단계";
+            stage.text = "DAY " + career.Stage;
+            rouletteDescription.text="NOTHING "+(LightsOutRentModel.RouletteProbabilityForMultiplier(0)*100).ToString("0.##")+"% · ×2 "+(LightsOutRentModel.RouletteProbabilityForMultiplier(2)*100).ToString("0.##")+"% · ×10 "+(LightsOutRentModel.RouletteProbabilityForMultiplier(10)*100).ToString("0.##")+"%\n별도 룰렛 창에서 수입을 걸고 돌립니다.";
             phase.text = IsSpinning ? "퇴근 룰렛 정산 중" : bankrupt ? "기회 5회 소진" : career.LastCompleted ? "건물 소등 완료 · 기회 1회 사용" : "제한 시간 종료 · 기회 1회 사용";
             rent.text = LightsOutStyle.Format(career.RentDue);
             wallet.text = LightsOutStyle.Format(money);
@@ -167,7 +168,14 @@ namespace LightsOut
                 result.color = multiplier == 0 ? Red : multiplier == 10 ? Amber : Mint;
                 decision.text = bankrupt ? "5회 안에 월세를 갚지 못했습니다.\n돈과 강화를 초기화하고 1단계부터 시작합니다." : money >= career.RentDue ? "월세를 낼 수 있습니다!\n지금 납부하거나, 남은 기회를 활용하세요." : career.AttemptsRemaining > 0 ? "아직 월세가 부족합니다.\n강화하거나 다음 근무에서 더 벌어보세요." : "마지막 근무 정산을 확인하세요.";
             }
-            rentAdvice.text = bankrupt ? "재시작은 버튼을 눌렀을 때 진행됩니다." : "월세는 보유금에서 차감됩니다.\n남은 돈과 강화는 다음 단계로 이월됩니다.";
+            if(between&&career.CanPayRent)
+            {
+                decision.text="월세 납부 후 잔액  "+LightsOutStyle.Format(money-career.RentDue)+"\n남은 근무 기회  "+career.AttemptsRemaining+"회";
+                int early=owner.Permanent.PreviewEarlyBonus(career.Stage,career.AttemptsRemaining);
+                int points=owner.Permanent.PreviewPaymentPoints(career.Stage,career.AttemptsRemaining);
+                rentAdvice.text="납부  "+LightsOutStyle.Format(career.RentDue)+"\n관리인 포인트 +"+points+"  (조기 납부 +"+early+")";
+            }
+            else rentAdvice.text = bankrupt ? "재시작 후에도 액세서리와 포인트는 유지됩니다." : "월세는 보유금에서 차감됩니다.\n남은 돈과 강화는 다음 DAY로 이월됩니다.";
             summaryCaption.text=settled?"확정 정산액":"이번 근무에서 번 돈";
             summaryAmount.text=LightsOutStyle.Format(settled?career.LastSettledIncome:career.LastShiftIncome);
             summaryAmount.color=settled&&career.LastRouletteMultiplier==0?Red:career.RouletteUsed&&career.LastRouletteMultiplier==10?Amber:Mint;
@@ -176,16 +184,16 @@ namespace LightsOut
             keepLabel.text = settled ? "수입 정산 완료" : "그대로 받기  ×1";
             spinLabel.text = career.RouletteUsed?"룰렛 결과 다시 보기":settled?"이번 수입 정산 완료":career.LastShiftIncome<=0?"수입이 없어 룰렛 사용 불가":"룰렛 창 열기 →";
             payButton.interactable = between && settled && !IsSpinning && money >= career.RentDue;
-            payLabel.text = money >= career.RentDue ? "월세 내고 다음 단계 →" : "월세까지 " + LightsOutStyle.Format(System.Math.Max(0, career.RentDue - money)) + " 부족";
+            payLabel.text = money >= career.RentDue ? "월세 내고 DAY "+(career.Stage+1)+" 준비 →" : "월세까지 " + LightsOutStyle.Format(System.Math.Max(0, career.RentDue - money)) + " 부족";
             upgradeButton.interactable = between && settled && !IsSpinning;
             nextButton.interactable = between && settled && !IsSpinning && career.AttemptsRemaining > 0;
-            nextLabel.text = career.AttemptsRemaining > 0 ? "다음 근무 시작  ·  " + (career.AttemptsUsed + 1) + " / 5  →" : "이번 단계의 근무 기회를 모두 사용했습니다";
+            nextLabel.text = career.AttemptsRemaining > 0 ? "다음 근무 시작  ·  " + (career.AttemptsUsed + 1) + " / 5  →" : "이번 DAY의 근무 기회를 모두 사용했습니다";
             payButton.gameObject.SetActive(!bankrupt);
             upgradeButton.gameObject.SetActive(!bankrupt);
             nextButton.gameObject.SetActive(!bankrupt);
             restartButton.gameObject.SetActive(bankrupt);
             restartButton.interactable = bankrupt && !IsSpinning;
-            footer.text = bankrupt ? "새 출발: 보유금과 스킬 초기화 · 1단계의 낮은 건물부터 시작" : "소등 완료와 시간 만료 모두 기회를 1회 사용합니다.  ·  단계마다 총 5회";
+            footer.text = bankrupt ? "새 출발: 일반 스킬·보유금 초기화 · 액세서리·관리인 포인트 유지" : "근무 시작 시 기회 1회 사용  ·  DAY마다 총 5회  ·  조기 납부 포인트는 최고 DAY 최초 완납 때만 지급";
         }
 
         void DrawCity()

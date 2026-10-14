@@ -12,7 +12,7 @@ namespace LightsOut.Editor
         [Serializable] sealed class Result
         { public string name; public bool passed; public string details; }
         [Serializable] sealed class PendingSave
-        { public int id, kind; public double delay; public long action, sequence; public bool automated; }
+        { public int id, kind, waves; public double delay; public long action, sequence; public bool automated; }
         [Serializable] sealed class Snapshot
         {
             public int version, run;
@@ -24,6 +24,10 @@ namespace LightsOut.Editor
             public int[] skills;
             public bool[] lights;
             public List<PendingSave> pending;
+            public int floors, rooms, combo, peakCombo, keyOpeningRooms, ringRange;
+            public float roomWidth, comboRemaining, holdBonusSeconds, comboMovePerCount, ringChance, badgeBonusPerCombo;
+            public bool deferred, closed, pendingSettled, openingKeysApplied, departureBonusApplied;
+            public double pendingIncome;
         }
 
         [UnityEditor.MenuItem("Lights Out/Run movement and vertical checks")]
@@ -32,7 +36,7 @@ namespace LightsOut.Editor
         public static string Run()
         {
             Report report = new Report();
-            Check(report, "20 skills, branch graph, and level caps", SkillContract);
+            Check(report, "25 skills, preserved original branches, and level caps", SkillContract);
             Check(report, "prerequisites, purchase costs, and maximum-level rejection", Purchases);
             Check(report, "contact rewards once and movement-origin bonus", ContactRewards);
             Check(report, "movement, radius, and dash values", MovementValues);
@@ -59,13 +63,13 @@ namespace LightsOut.Editor
         {
             LightsOutVerticalModel model = new LightsOutVerticalModel();
             Snapshot saved = Read(model); saved.random = 97193711; saved.money = money; saved.earned = money;
-            saved.skills = levels ?? new int[20]; saved.surge = surge;
+            saved.skills = levels ?? new int[LightsOutVerticalModel.Skills.Length]; saved.surge = surge;
             Require(model.ImportJson(JsonUtility.ToJson(saved)), "Deterministic fixture was rejected");
             return model;
         }
         static int[] MaximumLevels()
         {
-            int[] levels = new int[20];
+            int[] levels = new int[LightsOutVerticalModel.Skills.Length];
             for (int i = 0; i < levels.Length; i++) levels[i] = LightsOutVerticalModel.Skills[i].MaxLevel;
             return levels;
         }
@@ -74,9 +78,9 @@ namespace LightsOut.Editor
         {
             var skills = LightsOutVerticalModel.Skills;
             int[] expected = { 10, 5, 5, 5, 1, 5, 5, 5, 5, 1, 5, 5, 5, 5, 1, 10, 10, 5, 5, 1 };
-            Require(skills.Length == 20, "The skill tree must contain exactly 20 nodes");
+            Require(skills.Length == 25, "The skill tree must contain 20 retained nodes and five appended nodes");
             int[] branches = new int[4];
-            for (int i = 0; i < skills.Length; i++)
+            for (int i = 0; i < 20; i++)
             {
                 var skill = skills[i];
                 Require(skill.Id == i && skill.Branch == i / 5 && skill.MaxLevel == expected[i], "Incorrect ID, branch, or cap at skill " + i);
@@ -88,16 +92,21 @@ namespace LightsOut.Editor
                     "Unreachable or unexpected predecessor at skill " + i);
             }
             foreach (int count in branches) Require(count == 5, "A branch does not contain five skills");
-            return "4 branches x 5 nodes; caps match the movement prototype contract";
+            for (int i = 20; i < skills.Length; i++) Require(skills[i].Id == i, "New nodes did not append stable IDs");
+            Require(skills[21].Branch == 2 && skills[21].MaxLevel == 3 && skills[21].PrerequisiteId == 12 && skills[21].PrerequisiteLevel == 3,
+                "The late active rise is not an upgrade of vertical penetration Lv.3");
+            Require(skills[22].MaxLevel == 6 && skills[23].MaxLevel == 3 && skills[24].PrerequisiteId == 11 && skills[24].PrerequisiteLevel == 2,
+                "Work speed, upper link or completion chain contracts differ");
+            return "Original 4 branches x 5 nodes retained; five additions append stable IDs 20 through 24";
         }
 
         static string Purchases()
         {
             LightsOutVerticalModel model = Fixture(null, 1e12);
-            Require(!model.BuySkill(-1) && !model.BuySkill(20), "An invalid skill purchase was accepted");
+            Require(!model.BuySkill(-1) && !model.BuySkill(25), "An invalid skill purchase was accepted");
             Require(!model.CanBuySkill(1) && !model.BuySkill(1), "A missing predecessor did not lock its successor");
             int purchases = 0;
-            for (int i = 0; i < 20; i++)
+            for (int i = 0; i < LightsOutVerticalModel.Skills.Length; i++)
             {
                 var definition = LightsOutVerticalModel.Skills[i];
                 for (int level = 0; level < definition.MaxLevel; level++)
@@ -112,7 +121,7 @@ namespace LightsOut.Editor
                 Require(!model.CanBuySkill(i) && !model.BuySkill(i) && double.IsPositiveInfinity(model.GetSkillCost(i)), "A maximum skill could be purchased again");
                 Near(atCap, model.Money, "Rejected purchase deducted money");
             }
-            return purchases + " legal level purchases, predecessor locks, exact costs, and 20 cap rejections";
+            return purchases + " legal level purchases, predecessor locks, exact costs, and 25 cap rejections";
         }
 
         static string ContactRewards()
@@ -128,7 +137,7 @@ namespace LightsOut.Editor
             Near(5, model.Money, "Repeated contact paid twice");
             Require(events == 1 && model.TotalOff == 1, "Repeated contact emitted another completion");
 
-            int[] movement = new int[20]; for (int i = 0; i < 5; i++) movement[i] = LightsOutVerticalModel.Skills[i].MaxLevel;
+            int[] movement = new int[LightsOutVerticalModel.Skills.Length]; for (int i = 0; i < 5; i++) movement[i] = LightsOutVerticalModel.Skills[i].MaxLevel;
             LightsOutVerticalModel bonus = Fixture(movement);
             bonus.Contact(0, 0); Near(10, bonus.Money, "Movement-origin bonus did not double the room reward");
             Near(5, bonus.GetRoomReward(0, true), "Movement-origin bonus leaked into automatic rewards");
@@ -140,7 +149,7 @@ namespace LightsOut.Editor
             LightsOutVerticalModel baseline = Fixture();
             Near(4.8, baseline.MoveSpeed, "Base movement speed differs"); Near(.12, baseline.ExtinguishRadius, "Base contact radius differs");
             Require(!baseline.DashUnlocked, "Dash is unlocked without its skill");
-            int[] levels = new int[20]; for (int i = 0; i < 5; i++) levels[i] = LightsOutVerticalModel.Skills[i].MaxLevel;
+            int[] levels = new int[LightsOutVerticalModel.Skills.Length]; for (int i = 0; i < 5; i++) levels[i] = LightsOutVerticalModel.Skills[i].MaxLevel;
             LightsOutVerticalModel maximum = Fixture(levels);
             Near(4.8 * 2.2, maximum.MoveSpeed, "Maximum movement speed differs"); Near(.12 + 5 * .45, maximum.ExtinguishRadius, "Maximum range differs");
             Require(maximum.DashUnlocked && maximum.DashCooldown > 0, "Maximum dash is unavailable or has no cooldown");
@@ -164,7 +173,7 @@ namespace LightsOut.Editor
 
         static string FractionalAutomation()
         {
-            int[] levels = new int[20]; levels[15] = 1;
+            int[] levels = new int[LightsOutVerticalModel.Skills.Length]; levels[15] = 1;
             LightsOutVerticalModel model = Fixture(levels); Near(.2, model.AutomationRate, "Level-one automatic rate differs");
             model.Tick(0); model.Tick(float.NaN); model.Tick(float.PositiveInfinity);
             Require(model.TotalOff == 0, "An invalid elapsed-time value advanced automation");
@@ -197,17 +206,22 @@ namespace LightsOut.Editor
 
         static string FloorProgression()
         {
-            int[] levels = new int[20]; levels[0] = 3;
+            int[] levels = new int[LightsOutVerticalModel.Skills.Length]; levels[0] = 3;
             LightsOutVerticalModel model = Fixture(levels);
-            for (int col = 0; col < model.FloorRooms; col++) model.Contact(2, col);
+            double expected = 0;
+            Action<int, int> complete = (floor, col) =>
+            {
+                expected += model.GetRoomReward(floor) * LightsOutBalanceSettings.Shared.ComboMultiplierFor((int)model.TotalOff + 1);
+                Require(model.Contact(floor, col), "A lit room in the completion route was rejected");
+            };
+            for (int col = 0; col < model.FloorRooms; col++) complete(2, col);
             Require(model.CurrentFloor == 0 && model.ClearedFloors == 1 && model.HighestClearedFloor == 2, "An out-of-order cleared floor skipped unfinished lower floors");
-            for (int col = 0; col < model.FloorRooms; col++) model.Contact(0, col);
+            for (int col = 0; col < model.FloorRooms; col++) complete(0, col);
             Require(model.CurrentFloor == 1, "Completing the first floor did not advance the frontier");
-            for (int col = 0; col < model.FloorRooms; col++) model.Contact(1, col);
+            for (int col = 0; col < model.FloorRooms; col++) complete(1, col);
             Require(model.CurrentFloor == 3 && model.ClearedFloors == 3, "Contiguous advancement did not skip an already-cleared upper floor");
-            for (int floor = 3; floor < model.FloorCount; floor++) for (int col = 0; col < model.FloorRooms; col++) model.Contact(floor, col);
+            for (int floor = 3; floor < model.FloorCount; floor++) for (int col = 0; col < model.FloorRooms; col++) complete(floor, col);
             Require(model.IsComplete && model.CanGoHome && model.ClearedFloors == 300 && model.TotalOff == 1200, "The entire building did not complete once");
-            double expected = 0; for (int floor = 0; floor < model.FloorCount; floor++) expected += model.GetRoomReward(floor) * model.FloorRooms;
             Near(expected, model.Money, "Building income contains an unexpected duplicate or missing reward");
             double earned = model.Money; model.Tick(60); Require(!model.Contact(0, 0), "Completed building accepted contact"); Near(earned, model.Money, "Completed building continued paying");
             Require(model.StartNextRun() && model.RunNumber == 2 && !model.IsComplete && model.ClearedFloors == 0 && model.CurrentFloor == 0,
@@ -219,7 +233,7 @@ namespace LightsOut.Editor
 
         static string SaveRoundTrip()
         {
-            int[] levels = new int[20]; levels[5] = 5; levels[15] = 1;
+            int[] levels = new int[LightsOutVerticalModel.Skills.Length]; levels[5] = 5; levels[15] = 1;
             LightsOutVerticalModel original = Fixture(levels, 1234); original.Contact(0, 0); original.Tick(.04f);
             Require(original.PendingEventCount > 0 && original.AutomationProgress > 0, "Save fixture lacks a pending chain or fractional work");
             LightsOutVerticalModel loaded = new LightsOutVerticalModel(); Require(loaded.ImportJson(original.ExportJson()), "Valid partial save was rejected");
@@ -233,7 +247,10 @@ namespace LightsOut.Editor
             Near(a.AutomationProgress, b.AutomationProgress, "Saved fractional work differs"); Near(a.SurgeRemaining, b.SurgeRemaining, "Saved surge differs");
             Require(a.TotalOff == b.TotalOff && a.CurrentFloor == b.CurrentFloor && a.ClearedFloors == b.ClearedFloors &&
                 a.PendingEventCount == b.PendingEventCount && a.BlackoutCharge == b.BlackoutCharge && a.AutoFloorCharge == b.AutoFloorCharge, "Saved counters or pending queue differ");
-            for (int i = 0; i < 20; i++) Require(a.SkillLevels[i] == b.SkillLevels[i], "Saved skill level differs");
+            Near(a.BaseRoomWidth, b.BaseRoomWidth, "Saved building width differs");
+            Require(a.FloorRooms == b.FloorRooms && a.Combo == b.Combo && a.PeakCombo == b.PeakCombo, "Saved columns or combo counters differ");
+            Near(a.ComboRemaining, b.ComboRemaining, "Saved combo lifetime differs");
+            for (int i = 0; i < LightsOutVerticalModel.Skills.Length; i++) Require(a.SkillLevels[i] == b.SkillLevels[i], "Saved skill level differs");
             for (int floor = 0; floor < a.FloorCount; floor++) for (int col = 0; col < a.FloorRooms; col++)
                 Require(a.IsLightOn(floor, col) == b.IsLightOn(floor, col), "Saved room state differs");
         }
@@ -264,13 +281,14 @@ namespace LightsOut.Editor
             Require(LightsOutMover.SegmentIntersects(Vector2.zero, Vector2.zero, box), "Stationary contact inside a room was missed");
             Require(!LightsOutMover.SegmentIntersects(new Vector2(-3, 2), new Vector2(3, 2), box), "A parallel outside dash contacted a room");
             Require(!LightsOutMover.SegmentIntersects(new Vector2(3, 3), new Vector2(3, 3), box), "Stationary outside point contacted a room");
-            LightsOutVerticalModel model = Fixture();
-            float left = -model.FloorRooms * LightsOutMover.RoomWidth * .5f;
+            int[] instant = new int[LightsOutVerticalModel.Skills.Length]; instant[22] = 6;
+            LightsOutVerticalModel model = Fixture(instant);
+            float left = -model.FloorRooms * model.RoomWidth * .5f;
             Vector2 start = new Vector2(left + .12f, .9f), end = new Vector2(-left - .12f, .9f);
             int contacts = LightsOutMover.Sweep(model, start, end, .12f);
             Require(contacts == 4 && model.ClearedFloors == 1 && model.TotalOff == 4, "Horizontal sweep did not contact every crossed room exactly once");
             Require(LightsOutMover.Sweep(model, start, end, .12f) == 0 && model.TotalOff == 4, "Repeated sweep paid off rooms again");
-            LightsOutVerticalModel vertical = Fixture(); float x = left + LightsOutMover.RoomWidth * .5f;
+            LightsOutVerticalModel vertical = Fixture(instant); float x = left + vertical.RoomWidth * .5f;
             int acrossFloors = LightsOutMover.Sweep(vertical, new Vector2(x, .9f), new Vector2(x, 6 * LightsOutMover.FloorHeight + .9f), .12f);
             Require(acrossFloors == 7 && vertical.TotalOff == 7, "A long vertical dash missed crossed floors");
             return "Stationary, parallel, through, four-room horizontal, and seven-floor vertical sweeps are correct";

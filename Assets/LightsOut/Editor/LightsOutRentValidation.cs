@@ -13,6 +13,8 @@ namespace LightsOut.Editor
         { public int passed, failed; public List<Result> checks = new List<Result>(); }
         [Serializable] sealed class Result
         { public string name; public bool passed; public string details; }
+        [Serializable] sealed class Plan
+        { public int columns, floors; public float roomWidth, duration; public double rentDue; }
         [Serializable] sealed class Snapshot
         {
             public int version, stage, phase, attempts, slot, multiplier;
@@ -21,6 +23,7 @@ namespace LightsOut.Editor
             public bool lastCompleted, rouletteUsed, settled;
             public uint random;
             public string work;
+            public Plan plan;
         }
 
         [UnityEditor.MenuItem("Lights Out/Run rent, timer and roulette checks")]
@@ -29,12 +32,12 @@ namespace LightsOut.Editor
         public static string Run()
         {
             Report report = new Report();
-            Check(report, "slow manual opening building and five-opportunity rent budget", OpeningDifficulty);
-            Check(report, "timeout consumes exactly one opportunity and closes rewards", TimeoutOnce);
-            Check(report, "full completion consumes exactly one opportunity", CompletionOnce);
+            Check(report, "held-work opening mall and five-opportunity rent budget", OpeningDifficulty);
+            Check(report, "timeout closes rewards without charging another opportunity", TimeoutOnce);
+            Check(report, "full completion retains exactly one started opportunity", CompletionOnce);
             Check(report, "deadline caps simulation and rejects invalid elapsed time", DeadlineBoundary);
             Check(report, "attempt income stays separate from the bank until settlement", DeferredSettlement);
-            Check(report, "roulette has 21 slots: ten x2, ten losses, one x10", RouletteContract);
+            Check(report, "roulette keeps 21 IDs with weighted x2 37%, loss 60%, x10 3%", RouletteContract);
             Check(report, "roulette stakes only this attempt and settles exactly once", RouletteScope);
             Check(report, "selected roulette outcome persists with no reload reroll", RoulettePersistence);
             Check(report, "early rent deducts exactly and carries upgrades and remaining cash", EarlyRent);
@@ -42,7 +45,7 @@ namespace LightsOut.Editor
             Check(report, "fifth opportunity can pay rent and cannot spend its rent reserve", FinalRentReserve);
             Check(report, "fifth checkout allows a roulette rescue before failure", FifthRouletteRescue);
             Check(report, "five failed opportunities bankrupt and reset the campaign", BankruptcyAndReset);
-            Check(report, "all four campaign phases and partial work round-trip", SavePhases);
+            Check(report, "all five campaign phases and partial work round-trip", SavePhases);
             Check(report, "invalid campaign saves reject atomically", InvalidSaves);
             return JsonUtility.ToJson(report, true);
         }
@@ -71,7 +74,7 @@ namespace LightsOut.Editor
         }
         static LightsOutRentModel Fixture(double money = 0, int[] skills = null, uint seed = 97193711)
         {
-            var model = new LightsOutRentModel(); Snapshot save = Read(model);
+            var model = new LightsOutRentModel(); Require(model.StartReadyWork(), "A new lobby could not start its first work opportunity"); Snapshot save = Read(model);
             save.random = seed;
             save.work = Number(Number(save.work, "money", money), "earned", money);
             if (skills != null) save.work = Levels(save.work, skills);
@@ -99,7 +102,7 @@ namespace LightsOut.Editor
                 Expire(model); Require(model.SkipRoulette(), "Earlier checkout could not settle");
                 Require(model.StartNextAttempt(), "An unused opportunity could not start");
             }
-            Require(model.AttemptsUsed == 4 && model.AttemptNumber == 5 && model.AttemptsRemaining == 1, "The fifth working opportunity is counted incorrectly");
+            Require(model.AttemptsUsed == 5 && model.AttemptNumber == 5 && model.AttemptsRemaining == 0, "The fifth working opportunity was not consumed at start");
         }
         static double BuildingIncome(LightsOutVerticalModel work)
         { double total = 0; for (int floor = 0; floor < work.FloorCount; floor++) total += work.GetRoomReward(floor) * work.FloorRooms; return total; }
@@ -107,30 +110,39 @@ namespace LightsOut.Editor
         static string OpeningDifficulty()
         {
             var model = Fixture();
-            Require(model.Stage == 1 && model.AttemptsUsed == 0 && model.AttemptsRemaining == 5 && model.AttemptNumber == 1, "A new campaign does not begin with five opportunities");
-            Require(model.Work.FloorCount <= 6 && model.TimeRemaining > 0 && model.RentDue > 0, "The opening building is not a small timed building");
+            Require(model.Stage == 1 && model.AttemptsUsed == 1 && model.AttemptsRemaining == 4 && model.AttemptNumber == 1, "Starting work did not consume the first of five opportunities");
+            Require(model.Work.FloorCount == 2 && model.Work.FloorRooms == 20 && model.TimeRemaining > 0 && model.RentDue > 0, "The opening mall is not twenty columns by two floors");
+            Near(80, model.AttemptDuration, "The opening DAY does not allow eighty seconds");
             double gross = BuildingIncome(model.Work); Require(gross * 5 >= model.RentDue, "Even five complete baseline shifts cannot pay the first rent");
-            Vector2 position = new Vector2(-3.6f, .9f); LightsOutMover.Sweep(model.Work, position, position, model.Work.ExtinguishRadius);
-            float elapsed = 0, speed = model.Work.MoveSpeed * .35f;
-            for (int floor = 0; floor < model.Work.FloorCount && model.Phase == RentPhase.Working; floor++)
+            var go = new GameObject("Isolated opening mall validation"); go.hideFlags = HideFlags.HideAndDontSave;
+            float elapsed = 0; double paid = 0; var seen = new HashSet<int>();
+            model.Work.Extinguished += e => { paid += e.Reward; foreach (int id in e.AffectedIds) Require(seen.Add(id), "The opening manual route paid a light twice"); };
+            try
             {
-                Vector2 end = new Vector2(floor % 2 == 0 ? 3.6f : -3.6f, floor * 1.8f + .9f);
-                Walk(model, ref position, end, speed, ref elapsed);
-                if (floor + 1 < model.Work.FloorCount) Walk(model, ref position, new Vector2(end.x, end.y + 1.8f), speed, ref elapsed);
+                var mover = go.AddComponent<LightsOutMover>();
+                mover.ResetMotion(new Vector2(-model.Work.HalfWidth + model.Work.RoomWidth * .5f, .9f)); mover.Initialize(model.Work);
+                for (int floor = 0; floor < model.Work.FloorCount && model.Phase == RentPhase.Working; floor++)
+                    for (int index = 0; index < model.Work.FloorRooms && model.Phase == RentPhase.Working; index++)
+                    {
+                        int column = floor % 2 == 0 ? index : model.Work.FloorRooms - 1 - index;
+                        Vector2 target = new Vector2(-model.Work.HalfWidth + (column + .5f) * model.Work.RoomWidth, (floor + .5f) * 1.8f);
+                        Walk(model, mover, target, ref elapsed);
+                        while (model.Work.IsLightOn(floor, column) && model.Phase == RentPhase.Working)
+                        { mover.StepInput(Vector2.zero, .05f); model.Tick(.05f); elapsed += .05f; }
+                    }
             }
+            finally { UnityEngine.Object.DestroyImmediate(go); }
             model.EndAttempt(true);
-            Require(model.LastCompleted && elapsed < model.AttemptDuration, "A deliberate 35%-speed snake route cannot clear the opening building before its deadline");
-            Near(gross, model.LastShiftIncome, "The complete manual route missed rooms or paid duplicates");
-            return model.Work.FloorCount + " floors cleared at 35% base movement speed in " + elapsed.ToString("0.0") + "s / " + model.AttemptDuration.ToString("0") + "s; five full shifts cover rent";
+            Require(model.LastCompleted && elapsed < model.AttemptDuration && seen.Count == 40, "An unupgraded held-work route cannot clear all forty opening rooms before its deadline");
+            Near(paid, model.LastShiftIncome, "The complete manual route missed or duplicated income"); Near(0, model.Work.Money, "Unsettled opening work paid the bank early");
+            return "20 columns x 2 floors cleared using baseline movement and one-second work in " + elapsed.ToString("0.0") + "s / 80s; all forty lights paid once";
         }
-        static void Walk(LightsOutRentModel model, ref Vector2 position, Vector2 target, float speed, ref float elapsed)
+        static void Walk(LightsOutRentModel model, LightsOutMover mover, Vector2 target, ref float elapsed)
         {
-            while (Vector2.Distance(position, target) > .001f && model.Phase == RentPhase.Working)
+            while (Vector2.Distance(mover.Position, target) > .001f && model.Phase == RentPhase.Working)
             {
-                float dt = Math.Min(.1f, Vector2.Distance(position, target) / speed);
-                Vector2 next = Vector2.MoveTowards(position, target, speed * dt);
-                LightsOutMover.Sweep(model.Work, position, next, model.Work.ExtinguishRadius);
-                position = next; model.Tick(dt); elapsed += dt;
+                float dt = Math.Min(.05f, Vector2.Distance(mover.Position, target) / model.Work.MoveSpeed);
+                mover.StepInput((target - mover.Position).normalized, dt); model.Tick(dt); elapsed += dt;
             }
         }
         static string TimeoutOnce()
@@ -149,12 +161,12 @@ namespace LightsOut.Editor
             Require(used == 1 && model.AttemptsRemaining == 4, "Complete shift did not use exactly one opportunity");
             model.EndAttempt(true); model.EndAttempt(false); model.Tick(100);
             Require(model.AttemptsUsed == used && !model.StartNextAttempt() && !model.PayRent(), "Unsettled checkout changed stage/opportunity or accepted payment");
-            Require(model.SkipRoulette() && model.StartNextAttempt() && model.AttemptsUsed == 1 && model.AttemptNumber == 2, "Next work did not preserve consumed opportunity count");
-            return "Completion consumes exactly one; checkout must settle before next work/payment";
+            Require(model.SkipRoulette() && model.StartNextAttempt() && model.AttemptsUsed == 2 && model.AttemptNumber == 2, "Next work did not charge exactly one opportunity at start");
+            return "First completion stays at one used chance; starting the second work charges the second chance once";
         }
         static string DeadlineBoundary()
         {
-            int[] skills = new int[20]; skills[15] = 1; var model = Fixture(0, skills);
+            int[] skills = new int[LightsOutVerticalModel.Skills.Length]; skills[15] = 1; var model = Fixture(0, skills);
             Snapshot save = Read(model); save.remaining = .1f; Require(model.ImportJson(JsonUtility.ToJson(save)), "Short-deadline fixture rejected");
             string before = model.ExportJson(); model.Tick(float.NaN); model.Tick(float.PositiveInfinity); model.Tick(-1); model.Tick(0);
             Require(model.ExportJson() == before, "Invalid elapsed time altered a shift");
@@ -181,8 +193,9 @@ namespace LightsOut.Editor
         {
             var seeds = new Dictionary<int, uint>(); var model = Fixture(100);
             model.Work.Contact(0, 0); Expire(model); Snapshot checkout = Read(model);
-            for (uint seed = 1; seed <= 4096 && seeds.Count < 21; seed++)
+            for (uint sequence = 1; sequence <= 4096 && seeds.Count < 21; sequence++)
             {
+                uint seed = unchecked(sequence * 2654435761u);
                 checkout.random = seed; var trial = new LightsOutRentModel();
                 Require(trial.ImportJson(JsonUtility.ToJson(checkout)) && trial.SpinRoulette(), "Seeded roulette fixture failed");
                 Require(trial.LastRouletteSlot >= 0 && trial.LastRouletteSlot < 21, "Roulette selected a slot outside the 21-slot wheel");
@@ -203,7 +216,25 @@ namespace LightsOut.Editor
                 else Require(false, "Wheel contains an unauthorized multiplier");
             }
             Require(doubleSlots == 10 && lostSlots == 10 && jackpotSlots == 1, "Wheel does not contain ten x2, ten loss, and one x10 outcomes");
-            return "All 21 selectable outcomes verified: 10 x2 / 10 x0 / 1 x10";
+            Near(.37, LightsOutRentModel.RouletteProbabilityForMultiplier(2), "Double-income probability differs");
+            Near(.60, LightsOutRentModel.RouletteProbabilityForMultiplier(0), "Nothing probability differs");
+            Near(.03, LightsOutRentModel.RouletteProbabilityForMultiplier(10), "Jackpot probability differs");
+            double probability = 0;
+            double degrees = 0;
+            for (int slot = 0; slot < 21; slot++)
+            {
+                probability += LightsOutRentModel.RouletteProbabilityForSlot(slot);
+                int visual = LightsOutRoulettePopup.VisualIndexForSlot(slot);
+                Require(LightsOutRoulettePopup.SlotForVisualIndex(visual) == slot, "Alternating presentation changed a saved canonical ID");
+                Require(LightsOutRoulettePopup.VisualIndexAtAngle(LightsOutRoulettePopup.AngleForSlot(slot)) == visual,
+                    "A selected canonical sector does not land at its displayed visual centre");
+                degrees += LightsOutRoulettePopup.WidthForVisualIndex(visual);
+                if (visual < 20) Require(LightsOutRentModel.MultiplierForSlot(LightsOutRoulettePopup.SlotForVisualIndex(visual)) == (visual % 2 == 0 ? 2 : 0),
+                    "Double and NOTHING sectors are not alternating");
+            }
+            Near(1, probability, "Canonical sector probabilities do not sum to one");
+            Near(360, degrees, "Weighted visual sectors do not cover a complete wheel");
+            return "All 21 canonical IDs reachable; group weights x2 37%, NOTHING 60%, x10 3%; normalized slot probability sum 1";
         }
         static string RouletteScope()
         {
@@ -235,38 +266,40 @@ namespace LightsOut.Editor
         }
         static string EarlyRent()
         {
-            int[] skills = new int[20]; skills[0] = 3; var model = Fixture(1000, skills); var work = model.Work;
+            int[] skills = new int[LightsOutVerticalModel.Skills.Length]; skills[0] = 3; var model = Fixture(1000, skills); var work = model.Work;
             Expire(model); Require(model.SkipRoulette() && model.CanPayRent, "Affordable first checkout cannot pay rent");
             double bank = model.Work.Money, rent = model.RentDue; int floors = model.Work.FloorCount;
             Require(model.PayRent(), "Early rent payment was rejected");
             Require(ReferenceEquals(work, model.Work), "Stage change replaced the live work model and its event subscriptions");
             Near(bank - rent, model.Work.Money, "Rent did not deduct exactly and carry the remaining cash");
-            Require(model.Stage == 2 && model.AttemptsUsed == 0 && model.AttemptsRemaining == 5 && model.Phase == RentPhase.Working,
-                "Early payment did not discard remaining chances and begin a new five-opportunity stage");
-            Require(model.Work.SkillLevels[0] == 3 && model.Work.FloorCount > floors && model.RentDue > rent, "New stage lost upgrades or failed to raise building/rent");
+            Require(model.Stage == 2 && model.AttemptsUsed == 0 && model.AttemptsRemaining == 5 && model.Phase == RentPhase.Lobby,
+                "Early payment did not discard remaining chances and prepare a new five-opportunity DAY lobby");
+            Require(model.Work.SkillLevels[0] == 3 && model.Work.FloorCount == LightsOutRentModel.FloorsForStage(2) && model.Work.FloorRooms == LightsOutRentModel.ColumnsForStage(2) && model.RentDue > rent,
+                "New DAY lost upgrades or failed to adopt the intended new building/rent");
             Require(!model.PayRent(), "The same stage payment could execute twice");
             return "Early payment subtracts rent, carries cash/upgrades, increases building/rent, and starts five fresh opportunities";
         }
         static string UpgradeTradeoff()
         {
-            var model = Fixture(180); Expire(model); Require(model.SkipRoulette() && model.CanPayRent, "Tradeoff fixture cannot afford rent");
+            var model = Fixture(LightsOutRentModel.RentForStage(1) + 20); Expire(model); Require(model.SkipRoulette() && model.CanPayRent, "Tradeoff fixture cannot afford rent");
             double cost = model.Work.GetSkillCost(0), bank = model.Work.Money;
             Require(model.CanBuySkill(0) && model.BuySkill(0), "An early opportunity incorrectly forces rent reservation");
             Near(bank - cost, model.Work.Money, "Upgrade did not deduct its exact cost");
             Require(!model.CanPayRent && model.AttemptsRemaining == 4 && model.StartNextAttempt(), "Upgrading instead of paying did not leave remaining work opportunities");
             Require(model.Work.SkillLevels[0] == 1, "Purchased upgrade was lost at the next opportunity");
-            return "Early bank 180 can invest 50, postpone rent, and continue with four chances and the stronger movement skill";
+            return "A bank twenty above rent can invest fifty, postpone payment and use its remaining opportunities with stronger movement";
         }
         static string FinalRentReserve()
         {
-            var model = Fixture(210); ReachFifth(model); Expire(model); Require(model.SkipRoulette(), "Fifth guaranteed settlement rejected");
+            double boundary = LightsOutRentModel.RentForStage(1) + LightsOutVerticalModel.Skills[0].BaseCost;
+            var model = Fixture(boundary); ReachFifth(model); Expire(model); Require(model.SkipRoulette(), "Fifth guaranteed settlement rejected");
             Require(model.Phase == RentPhase.BetweenAttempts && model.CanPayRent && !model.StartNextAttempt(), "A solvent final shift cannot pay rent or incorrectly grants a sixth chance");
             Require(model.CanBuySkill(0) && model.BuySkill(0), "A final upgrade leaving exactly enough rent was rejected"); Near(model.RentDue, model.Work.Money, "Boundary upgrade did not leave exact rent");
-            Require(!model.CanBuySkill(5) && !model.BuySkill(5) && !string.IsNullOrEmpty(model.GetSkillLockReason(5)), "A final upgrade spent the protected rent reserve");
+            Require(!model.CanBuySkill(22) && !model.BuySkill(22) && !string.IsNullOrEmpty(model.GetSkillLockReason(22)), "A final DAY-one-legal upgrade spent the protected rent reserve");
             Require(model.PayRent() && model.Stage == 2, "Solvent final opportunity cannot advance after safe upgrade");
-            var belowBoundary = Fixture(209.99); ReachFifth(belowBoundary); Expire(belowBoundary); belowBoundary.SkipRoulette();
+            var belowBoundary = Fixture(boundary - .01); ReachFifth(belowBoundary); Expire(belowBoundary); belowBoundary.SkipRoulette();
             Require(!belowBoundary.CanBuySkill(0) && !belowBoundary.BuySkill(0), "A sub-rent remainder was allowed at the final opportunity");
-            return "No sixth chance; 210 - 50 = 160 rent is allowed, 209.99 - 50 is blocked; final rent still advances";
+            return "No sixth chance; an upgrade leaving exactly rent is allowed, leaving one cent less is blocked; final payment advances";
         }
         static string FifthRouletteRescue()
         {
@@ -291,7 +324,7 @@ namespace LightsOut.Editor
             Require(model.SkipRoulette() && model.Phase == RentPhase.Bankrupt && model.AttemptsUsed == 5, "Five unpaid opportunities did not bankrupt after settlement");
             Require(!model.PayRent() && !model.StartNextAttempt() && !model.SpinRoulette() && !model.BuySkill(0), "Bankruptcy allows further play, gambling, or payment");
             model.Reset(); Require(ReferenceEquals(work, model.Work), "Reset replaced the live work model");
-            Require(model.Stage == 1 && model.AttemptsUsed == 0 && model.AttemptsRemaining == 5 && model.Work.Money == 0 && model.Phase == RentPhase.Working,
+            Require(model.Stage == 1 && model.AttemptsUsed == 0 && model.AttemptsRemaining == 5 && model.Work.Money == 0 && model.Phase == RentPhase.Lobby,
                 "Bankruptcy reset did not restart the campaign from the beginning");
             foreach (int level in model.Work.SkillLevels) Require(level == 0, "Restart retained failed-campaign upgrades");
             return "Five unpaid settled opportunities bankrupt; reset starts stage 1 with zero bank/upgrades and five new chances";
@@ -302,9 +335,11 @@ namespace LightsOut.Editor
                 a.LastCompleted == b.LastCompleted && a.LastRouletteSlot == b.LastRouletteSlot && a.LastRouletteMultiplier == b.LastRouletteMultiplier &&
                 a.RouletteUsed == b.RouletteUsed && a.SettlementResolved == b.SettlementResolved, "Campaign counters/outcome differ after load");
             Near(a.TimeRemaining, b.TimeRemaining, "Remaining timer differs"); Near(a.LastShiftIncome, b.LastShiftIncome, "Shift income differs");
+            Near(a.AttemptDuration, b.AttemptDuration, "Saved DAY duration differs"); Near(a.RentDue, b.RentDue, "Saved DAY rent differs");
             Near(a.Work.Money, b.Work.Money, "Bank differs"); Near(a.Work.TotalEarned, b.Work.TotalEarned, "Cumulative earnings differ");
+            Near(a.Work.BaseRoomWidth, b.Work.BaseRoomWidth, "Base building width differs");
             Require(a.Work.FloorCount == b.Work.FloorCount && a.Work.TotalOff == b.Work.TotalOff && a.Work.PendingEventCount == b.Work.PendingEventCount, "Work building/progression differs");
-            for (int i = 0; i < 20; i++) Require(a.Work.SkillLevels[i] == b.Work.SkillLevels[i], "Upgrade differs after load");
+            for (int i = 0; i < LightsOutVerticalModel.Skills.Length; i++) Require(a.Work.SkillLevels[i] == b.Work.SkillLevels[i], "Upgrade differs after load");
             for (int floor = 0; floor < a.Work.FloorCount; floor++) for (int col = 0; col < a.Work.FloorRooms; col++)
                 Require(a.Work.IsLightOn(floor, col) == b.Work.IsLightOn(floor, col), "Light state differs after load");
         }
@@ -317,13 +352,14 @@ namespace LightsOut.Editor
         }
         static string SavePhases()
         {
-            int[] skills = new int[20]; skills[5] = 5; skills[15] = 1;
+            int[] skills = new int[LightsOutVerticalModel.Skills.Length]; skills[5] = 5; skills[15] = 1;
+            var lobby = new LightsOutRentModel(); RoundTrip(lobby);
             var working = Fixture(100, skills); working.Work.Contact(0, 0); working.Tick(.04f);
             Require(working.Work.PendingEventCount > 0 && working.Work.AutomationProgress > 0, "Working save lacks queued chain/fractional automatic progress"); RoundTrip(working);
             var checkout = Fixture(100); checkout.Work.Contact(0, 0); Expire(checkout); RoundTrip(checkout);
             var between = Fixture(100); Expire(between); between.SkipRoulette(); RoundTrip(between);
             var bankrupt = Fixture(); ReachFifth(bankrupt); Expire(bankrupt); bankrupt.SkipRoulette(); RoundTrip(bankrupt);
-            return "Working (queue/fractional work), unresolved checkout, settled between-attempts, and bankruptcy all persist without replacing model references";
+            return "Lobby, working (queue/fractional work), unresolved checkout, settled between-attempts and bankruptcy all persist without replacing model references";
         }
         static string InvalidSaves()
         {
@@ -338,6 +374,7 @@ namespace LightsOut.Editor
             reject(s => s.version = 0); reject(s => s.stage = 0); reject(s => s.phase = 99); reject(s => s.attempts = -1); reject(s => s.attempts = 6);
             reject(s => s.remaining = -1); reject(s => s.remaining = 99999); reject(s => s.lastIncome = -1); reject(s => s.slot = 21);
             reject(s => s.work = "not json"); reject(s => s.work = Number(s.work, "money", -1));
+            reject(s => s.plan.duration = 0); reject(s => s.plan.columns = 1); reject(s => s.plan.rentDue = -1);
             reject(s => s.settled = true); reject(s => s.rouletteUsed = true);
             Require(model.ExportJson() == before, "Malformed save rejection changed live state");
             return "Malformed JSON and " + rejected + " invalid campaign/work contracts rejected atomically";

@@ -5,7 +5,7 @@ using UnityEngine.EventSystems;
 
 namespace LightsOut
 {
-    /// <summary>Twenty-node skill tree, built on the existing 1600 x 900 overlay canvas.</summary>
+    /// <summary>Skill tree, built on the existing 1600 x 900 overlay canvas.</summary>
     public sealed class LightsOutSkillTree : MonoBehaviour
     {
         private LightsOutVerticalGame owner;
@@ -13,11 +13,11 @@ namespace LightsOut
         private TMP_Text money, title, level, description, currentEffect, nextEffect, requirement, price, buyLabel, zoomLabel, summary;
         private UnityEngine.UI.Button buyButton;
         private LightsOutShape detailBorder;
-        private readonly NodeView[] nodes = new NodeView[20];
+        private readonly NodeView[] nodes = new NodeView[LightsOutVerticalModel.Skills.Length];
         private readonly LightsOutShape[] branchBorders = new LightsOutShape[4];
         private readonly TMP_Text[] branchLevels = new TMP_Text[4];
-        private readonly LightsOutShape[] connections = new LightsOutShape[20];
-        private readonly LightsOutShape[] connectionGlows = new LightsOutShape[20];
+        private readonly LightsOutShape[] connections = new LightsOutShape[LightsOutVerticalModel.Skills.Length];
+        private readonly LightsOutShape[] connectionGlows = new LightsOutShape[LightsOutVerticalModel.Skills.Length];
         private readonly RectTransform[] detailIcons = new RectTransform[4];
         private int selected;
         private float zoom = 1f;
@@ -31,7 +31,9 @@ namespace LightsOut
             new Vector2(335,240), new Vector2(235,175), new Vector2(345,70), new Vector2(155,75), new Vector2(85,230),
             new Vector2(335,410), new Vector2(235,475), new Vector2(345,570), new Vector2(155,565), new Vector2(85,405),
             new Vector2(590,240), new Vector2(690,175), new Vector2(580,70), new Vector2(780,75), new Vector2(850,230),
-            new Vector2(590,410), new Vector2(690,475), new Vector2(580,570), new Vector2(780,565), new Vector2(850,405)
+            new Vector2(590,410), new Vector2(690,475), new Vector2(580,570), new Vector2(780,565), new Vector2(850,405),
+            new Vector2(535,155), new Vector2(790,310),
+            new Vector2(430,145), new Vector2(535,480), new Vector2(870,320)
         };
         private sealed class NodeView
         {
@@ -77,7 +79,7 @@ namespace LightsOut
             for (int i = 0; i < nodes.Length; i++)
             {
                 if (i != selected && !owner.CanBuySkill(i)) continue;
-                Color c = BranchColors[i / 5];
+                Color c = BranchColors[LightsOutVerticalModel.Skills[i].Branch];
                 c.a = (i == selected ? .16f : .08f) + breathe;
                 nodes[i].glow.color = c;
             }
@@ -125,19 +127,19 @@ namespace LightsOut
             AddPanAndZoom(viewport);
 
             // Lines are created first so every connection stays behind its nodes.
-            for (int i = 0; i < 20; i++)
+            for (int i = 0; i < nodes.Length; i++)
             {
                 var skill = LightsOutVerticalModel.Skills[i];
                 Vector2 start = skill.PrerequisiteId >= 0 ? Positions[skill.PrerequisiteId] : new Vector2(462, 325);
-                connections[i] = Line(treeContent, "Connection" + i, start, Positions[i], 2.4f, BranchColors[i / 5]);
-                connectionGlows[i] = Line(treeContent, "ConnectionGlow" + i, start, Positions[i], 8, Alpha(BranchColors[i / 5], .1f));
+                connections[i] = Line(treeContent, "Connection" + i, start, Positions[i], 2.4f, BranchColors[skill.Branch]);
+                connectionGlows[i] = Line(treeContent, "ConnectionGlow" + i, start, Positions[i], 8, Alpha(BranchColors[skill.Branch], .1f));
                 connections[i].rectTransform.SetAsLastSibling();
             }
             Box(treeContent, "CoreGlow", 412, 275, 100, 100, Alpha(BranchColors[0], .065f), 50);
             var core = Box(treeContent, "Core", 427, 290, 70, 70, Hex("193548"), 35);
             DrawBulb(core.rectTransform, 20, 14, 31, BranchColors[0]);
             Text(treeContent, "CoreLabel", "성장의 시작", 401, 363, 122, 24, 15, Muted, FontStyles.Normal, TextAlignmentOptions.Center);
-            for (int i = 0; i < 20; i++) BuildNode(i);
+            for (int i = 0; i < nodes.Length; i++) BuildNode(i);
 
             Box(panel, "DetailBorder", 1240, 105, 336, 701, Hex("31546F"), 12);
             Box(panel, "Details", 1242, 107, 332, 697, Panel, 11);
@@ -184,8 +186,9 @@ namespace LightsOut
         {
             int capture = id;
             Vector2 p = Positions[id];
-            Color c = BranchColors[id / 5];
-            bool final = id % 5 == 4;
+            int branch = LightsOutVerticalModel.Skills[id].Branch;
+            Color c = BranchColors[branch];
+            bool final = id % 5 == 4 || id == 21;
             float size = final ? 74 : 64;
             var parent = Rect(treeContent, "SkillNode" + id, p.x - size / 2, p.y - size / 2, size, size);
             var n = new NodeView();
@@ -193,7 +196,8 @@ namespace LightsOut
             n.outer = Box(parent, "Border", -3, -3, size + 6, size + 6, c, final ? 18 : 8);
             n.face = Box(parent, "Face", 0, 0, size, size, Tint(Card, c, .2f), final ? 16 : 6, true);
             n.button = Button(n.face, () => Select(capture));
-            n.icon = DrawIcon(parent, id / 5, size / 2 - 17, 7, 34, c);
+            n.icon = DrawIcon(parent, branch, size / 2 - 17, 7, 34, c);
+            if (id == 21) Text(parent, "ActiveKey", "R", size - 19, -2, 23, 24, 17, White, FontStyles.Bold, TextAlignmentOptions.Center);
             n.iconParts = n.icon.transform.parent.GetComponentsInChildren<LightsOutShape>();
             n.level = Text(parent, "Level", "0 / 5", 3, size - 26, size - 6, 23, 14, c, FontStyles.Bold, TextAlignmentOptions.Center);
             n.name = Text(parent, "Name", LightsOutVerticalModel.Skills[id].Name, size / 2 - 72, size + 7, 144, 26, 16, White, FontStyles.Normal, TextAlignmentOptions.Center);
@@ -214,7 +218,7 @@ namespace LightsOut
 
         private void Select(int id)
         {
-            selected = Mathf.Clamp(id, 0, 19);
+            selected = Mathf.Clamp(id, 0, nodes.Length - 1);
             Refresh();
         }
 
@@ -233,14 +237,15 @@ namespace LightsOut
             for (int b = 0; b < 4; b++)
             {
                 int levels = 0, maximum = 0;
-                for (int j = 0; j < 5; j++)
+                for (int id = 0; id < nodes.Length; id++)
                 {
-                    int id = b * 5 + j;
+                    if (LightsOutVerticalModel.Skills[id].Branch != b) continue;
                     int value = model.SkillLevels[id];
                     var s = LightsOutVerticalModel.Skills[id];
                     levels += value; maximum += s.MaxLevel; total += value;
                     if (value > 0) acquired++;
-                    bool locked = s.PrerequisiteId >= 0 && model.SkillLevels[s.PrerequisiteId] < s.PrerequisiteLevel;
+                    bool dayLocked=owner.Career.Stage<LightsOutBalanceSettings.Shared.MinimumDayForSkill(id);
+                    bool locked = (dayLocked&&value==0)||(s.PrerequisiteId >= 0 && model.SkillLevels[s.PrerequisiteId] < s.PrerequisiteLevel);
                     bool maxed = value >= s.MaxLevel;
                     bool canBuy = owner.CanBuySkill(id);
                     Color c = locked ? Locked : BranchColors[b];
@@ -251,35 +256,36 @@ namespace LightsOut
                     nodes[id].name.color = locked ? Muted : White;
                     nodes[id].level.color = c;
                     nodes[id].level.text = maxed ? "MAX" : value + " / " + s.MaxLevel;
-                    nodes[id].lockTag.text = locked ? "잠김" : maxed ? "완료" : canBuy ? "강화 가능" : "";
+                    nodes[id].lockTag.text = locked ? dayLocked?"DAY "+LightsOutBalanceSettings.Shared.MinimumDayForSkill(id):"잠김" : maxed ? "완료" : canBuy ? "강화 가능" : "";
                     nodes[id].lockTag.color = maxed || canBuy ? c : Muted;
                     nodes[id].glow.color = Alpha(c, id == selected ? .16f : canBuy ? .1f : .015f);
                     connections[id].color = Alpha(c, locked ? .3f : value > 0 ? .9f : .5f);
                     connectionGlows[id].color = Alpha(c, locked ? .015f : .07f);
                 }
                 branchLevels[b].text = levels + " / " + maximum;
-                branchBorders[b].color = Alpha(BranchColors[b], selected / 5 == b ? 1 : .45f);
+                branchBorders[b].color = Alpha(BranchColors[b], LightsOutVerticalModel.Skills[selected].Branch == b ? 1 : .45f);
             }
-            summary.text = "해금한 스킬  " + acquired + " / 20\n누적 강화  " + total + " 레벨\n네 계열을 함께 성장시키세요";
+            summary.text = "해금한 스킬  " + acquired + " / " + nodes.Length + "\n누적 강화  " + total + " 레벨\nDAY별 고급 스킬 해금";
             var skill = LightsOutVerticalModel.Skills[selected];
             int lv = model.SkillLevels[selected];
             bool completed = lv >= skill.MaxLevel;
-            Color category = BranchColors[selected / 5];
+            Color category = BranchColors[skill.Branch];
             title.text = skill.Name;
             level.text = "Lv. " + lv + " / " + skill.MaxLevel;
             level.color = category;
             detailBorder.color = category;
-            for (int b = 0; b < 4; b++) detailIcons[b].gameObject.SetActive(b == selected / 5);
+            for (int b = 0; b < 4; b++) detailIcons[b].gameObject.SetActive(b == skill.Branch);
             description.text = skill.EffectDescription;
             currentEffect.text = model.GetCurrentEffect(selected);
             nextEffect.text = completed ? "최대 레벨을 달성했습니다." : model.GetNextEffect(selected);
-            requirement.text = skill.PrerequisiteId < 0 ? "처음부터 강화 가능" : LightsOutVerticalModel.Skills[skill.PrerequisiteId].Name + " Lv. " + skill.PrerequisiteLevel + " 이상";
-            bool unlocked = skill.PrerequisiteId < 0 || model.SkillLevels[skill.PrerequisiteId] >= skill.PrerequisiteLevel;
+            int minimumDay=LightsOutBalanceSettings.Shared.MinimumDayForSkill(selected);
+            requirement.text = "DAY "+minimumDay+"  ·  "+(skill.PrerequisiteId < 0 ? "선행 스킬 없음" : LightsOutVerticalModel.Skills[skill.PrerequisiteId].Name + " Lv. " + skill.PrerequisiteLevel);
+            bool unlocked = owner.Career.Stage>=minimumDay&&(skill.PrerequisiteId < 0 || model.SkillLevels[skill.PrerequisiteId] >= skill.PrerequisiteLevel);
             requirement.color = unlocked ? BranchColors[3] : Muted;
             price.text = completed ? "강화 완료" : LightsOutStyle.Format(model.GetSkillCost(selected));
             price.color = category;
             buyButton.interactable = owner.CanBuySkill(selected);
-            buyLabel.text = completed ? "최대 레벨 달성" : !unlocked ? "선행 스킬 필요" : !buyButton.interactable ? (model.CanBuySkill(selected)?"월세 납부금 보호 중":"재화가 부족합니다") : "스킬 강화  +";
+            buyLabel.text = completed ? "최대 레벨 달성" : owner.Career.Stage<minimumDay ? "DAY "+minimumDay+" 해금" : !unlocked ? "선행 스킬 필요" : !buyButton.interactable ? (model.CanBuySkill(selected)?"월세 납부금 보호 중":"재화가 부족합니다") : "스킬 강화  +";
             BuyColors(category);
         }
 
