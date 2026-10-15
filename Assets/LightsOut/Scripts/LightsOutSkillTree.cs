@@ -33,7 +33,7 @@ namespace LightsOut
             new Vector2(590,240), new Vector2(690,175), new Vector2(580,70), new Vector2(780,75), new Vector2(850,230),
             new Vector2(590,410), new Vector2(690,475), new Vector2(580,570), new Vector2(780,565), new Vector2(850,405),
             new Vector2(535,155), new Vector2(790,310),
-            new Vector2(430,145), new Vector2(535,480), new Vector2(870,320)
+            new Vector2(430,145), new Vector2(535,480), new Vector2(870,320), new Vector2(135,325)
         };
         private sealed class NodeView
         {

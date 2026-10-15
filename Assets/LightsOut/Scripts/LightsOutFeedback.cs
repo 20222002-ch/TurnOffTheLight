@@ -20,7 +20,7 @@ namespace LightsOut
             owner=game;cameraView=camera;
             panel=new GameObject("GameplayFeedback",typeof(RectTransform)).GetComponent<RectTransform>();panel.SetParent(owner.UIRoot,false);panel.anchorMin=Vector2.zero;panel.anchorMax=Vector2.one;panel.offsetMin=panel.offsetMax=Vector2.zero;
             comboRect=Label("ComboCaption",230,60,out comboText);comboRect.pivot=Vector2.zero;comboRect.anchoredPosition=new Vector2(35,-80);comboText.fontSize=23;comboText.fontStyle=FontStyles.Bold;
-            for(int i=0;i<Popups;i++){var r=Label("IncomePopup"+i,210,38,out var t);t.fontSize=19;t.fontStyle=FontStyles.Bold;r.gameObject.SetActive(false);popups[i]=new Popup{Rect=r,Text=t};}
+            for(int i=0;i<Popups;i++){var r=Label("IncomePopup"+i,260,66,out var t);t.fontSize=19;t.fontStyle=FontStyles.Bold;r.gameObject.SetActive(false);popups[i]=new Popup{Rect=r,Text=t};}
             var root=new GameObject("Extinguish Spark Pool").transform;root.SetParent(transform,false);
             for(int i=0;i<Particles;i++)
             {
@@ -40,7 +40,7 @@ namespace LightsOut
             if((previousCombo<10&&combo>=10)||(previousCombo<20&&combo>=20)){punch=1;owner.PlayRouletteCue(2,combo>=20?1.18f:1,.25f);}
             previousCombo=combo;
             if(eventsThisFrame++>=EventBudget)return;
-            Color tint=combo>=20?Gold:Mint;bool amountShown=false;
+            Color tint=e.CashFound?LightsOutStyle.Hex("C5ACFF"):e.HighBonus||combo>=20?Gold:Mint;bool amountShown=false;
             for(int n=0;n<e.AffectedIds.Length&&n<12;n++)
             {
                 int id=e.AffectedIds[n],f=id/owner.Model.FloorRooms,c=id%owner.Model.FloorRooms;
@@ -48,7 +48,9 @@ namespace LightsOut
                 Vector3 view=cameraView.WorldToViewportPoint(at);if(view.x<0||view.x>1||view.y<0||view.y>1)continue;
                 if(!amountShown)
                 {
-                    int p=popupCursor++%Popups;var pop=popups[p];pop.Home=new Vector2(view.x*panel.rect.width,-(1-view.y)*panel.rect.height-20);pop.Rect.anchoredPosition=pop.Home;pop.Rect.gameObject.SetActive(true);pop.Text.text="+ "+LightsOutStyle.Format(e.Reward);pop.Text.color=tint;pop.Life=.8f;popups[p]=pop;amountShown=true;
+                    int p=popupCursor++%Popups;var pop=popups[p];pop.Home=new Vector2(view.x*panel.rect.width,-(1-view.y)*panel.rect.height-20);pop.Rect.anchoredPosition=pop.Home;pop.Rect.gameObject.SetActive(true);
+                    pop.Text.text=(e.CashFound?"<size=14>돈다발 발견 +"+LightsOutStyle.Format(e.CashReward)+"</size>\n":e.HighBonus?"<size=14>"+(e.RandomBonus>0?"보너스 +"+LightsOutStyle.Format(e.RandomBonus):"특수 전등 발견!")+"</size>\n":"")+"+ "+LightsOutStyle.Format(e.Reward);
+                    pop.Text.color=tint;pop.Life=.8f;pop.Text.alpha=1;popups[p]=pop;amountShown=true;
                 }
                 for(int k=0;k<3;k++)
                 {

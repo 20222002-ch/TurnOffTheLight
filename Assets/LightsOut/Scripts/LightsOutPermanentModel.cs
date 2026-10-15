@@ -32,6 +32,7 @@ namespace LightsOut
     {
         public const int AccessoryCount = 5, EquipmentSlots = 3;
         const int MaximumPoints = 1000000000, MaximumDay = 100000;
+        const long MaximumExperience = 9000000000000000L;
         public static readonly string[] Names = { "절전 장갑", "야근 운동화", "관리인 열쇠", "누전 반지", "황금 명찰" };
         public static readonly string[] Descriptions =
         {
@@ -45,9 +46,46 @@ namespace LightsOut
         public event Action Changed;
         public int Points { get; private set; }
         public int HighestPaidDay { get; private set; }
+        public long TotalExperience { get; private set; }
+        public int Level { get { return LevelForExperience(TotalExperience); } }
+        public long ExperienceAtLevelStart { get { return ExperienceAtStartOfLevel(Level); } }
+        public int ExperienceToNextLevel { get { return Level >= MaximumPlayerLevel ? 0 : RequiredExperienceForLevel(Level); } }
+        public int CurrentExperience { get { return Level >= MaximumPlayerLevel ? 0 : (int)Math.Min(int.MaxValue, TotalExperience - ExperienceAtLevelStart); } }
         public int[] Levels { get; private set; }
         public int[] Equipped { get; private set; }
         public int MaxLevel { get { return Math.Max(1, Math.Min(5, LightsOutBalanceSettings.Shared.MaxAccessoryLevel)); } }
+        public static int MaximumPlayerLevel { get { return Math.Max(1, Math.Min(1000, LightsOutBalanceSettings.Shared.MaximumLevel)); } }
+
+        public static int RequiredExperienceForLevel(int level)
+        {
+            var settings = LightsOutBalanceSettings.Shared;
+            long initial = Math.Max(1, settings.ExperienceBase), growth = Math.Max(0, settings.ExperienceGrowth);
+            return (int)Math.Min(int.MaxValue, initial + growth * Math.Max(0, level - 1));
+        }
+        public static long ExperienceAtStartOfLevel(int level)
+        {
+            var settings = LightsOutBalanceSettings.Shared;
+            long count = Math.Max(0, Math.Min(MaximumPlayerLevel, level) - 1);
+            return count * Math.Max(1, settings.ExperienceBase) + Math.Max(0, settings.ExperienceGrowth) * count * (count - 1) / 2;
+        }
+        public static int LevelForExperience(long experience)
+        {
+            experience = Math.Max(0, experience);
+            int level = 1;
+            while (level < MaximumPlayerLevel && experience >= ExperienceAtStartOfLevel(level + 1)) level++;
+            return level;
+        }
+        public void AddExperience(int amount)
+        {
+            if (amount <= 0 || TotalExperience >= MaximumExperience) return;
+            TotalExperience = Math.Min(MaximumExperience, TotalExperience + amount);
+            Notify();
+        }
+        public bool IsSpecialUnlocked(int kind)
+        {
+            int[] required = LightsOutBalanceSettings.Shared.SpecialUnlockLevels;
+            return kind >= 0 && required != null && kind < required.Length && Level >= Math.Max(1, required[kind]);
+        }
 
         public LightsOutPermanentModel()
         {
@@ -127,12 +165,12 @@ namespace LightsOut
         void Notify() { if (Changed != null) Changed(); }
 
         [Serializable] sealed class SaveState
-        { public int version, points, highest; public int[] levels, equipped; }
+        { public int version, points, highest; public int[] levels, equipped; public long totalExperience; }
 
         public string ExportJson()
         {
             return JsonUtility.ToJson(new SaveState
-            { version = 1, points = Points, highest = HighestPaidDay, levels = Levels, equipped = Equipped });
+            { version = 2, points = Points, highest = HighestPaidDay, levels = Levels, equipped = Equipped, totalExperience = TotalExperience });
         }
 
         public bool ImportJson(string json)
@@ -141,9 +179,10 @@ namespace LightsOut
             SaveState saved;
             try { saved = JsonUtility.FromJson<SaveState>(json); }
             catch (Exception) { return false; }
-            if (saved == null || saved.version != 1 || saved.points < 0 || saved.points > MaximumPoints ||
+            if (saved == null || (saved.version != 1 && saved.version != 2) || saved.points < 0 || saved.points > MaximumPoints ||
                 saved.highest < 0 || saved.highest > MaximumDay || saved.levels == null || saved.levels.Length != AccessoryCount ||
-                saved.equipped == null || saved.equipped.Length != EquipmentSlots) return false;
+                saved.equipped == null || saved.equipped.Length != EquipmentSlots ||
+                (saved.version == 2 && (saved.totalExperience < 0 || saved.totalExperience > MaximumExperience))) return false;
             for (int i = 0; i < AccessoryCount; i++) if (saved.levels[i] < 0 || saved.levels[i] > MaxLevel) return false;
             HashSet<int> slots = new HashSet<int>();
             for (int i = 0; i < EquipmentSlots; i++)
@@ -153,6 +192,7 @@ namespace LightsOut
                 if (!ValidId(id) || saved.levels[id] == 0 || !slots.Add(id)) return false;
             }
             Points = saved.points; HighestPaidDay = saved.highest;
+            TotalExperience = saved.version == 1 ? 0 : saved.totalExperience;
             Levels = (int[])saved.levels.Clone(); Equipped = (int[])saved.equipped.Clone();
             Notify(); return true;
         }

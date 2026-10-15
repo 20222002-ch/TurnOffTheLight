@@ -12,7 +12,7 @@ namespace LightsOut.Editor
         [Serializable] sealed class Result
         { public string name; public bool passed; public string details; }
         [Serializable] sealed class PendingSave
-        { public int id, kind, waves; public double delay; public long action, sequence; public bool automated; }
+        { public int id, kind, waves, depth, affected, limit; public double delay; public long action, sequence; public bool automated; }
         [Serializable] sealed class Snapshot
         {
             public int version, run;
@@ -28,15 +28,18 @@ namespace LightsOut.Editor
             public float roomWidth, comboRemaining, holdBonusSeconds, comboMovePerCount, ringChance, badgeBonusPerCombo;
             public bool deferred, closed, pendingSettled, openingKeysApplied, departureBonusApplied;
             public double pendingIncome;
+            public LightsOutIncomeState income;
         }
 
         [UnityEditor.MenuItem("Lights Out/Run movement and vertical checks")]
         static void RunFromMenu() { Debug.Log(Run()); }
 
         public static string Run()
+        { return LightsOutIncomeValidation.WithPureRules(RunPure); }
+        static string RunPure()
         {
             Report report = new Report();
-            Check(report, "25 skills, preserved original branches, and level caps", SkillContract);
+            Check(report, "26 skills, preserved original branches, and level caps", SkillContract);
             Check(report, "prerequisites, purchase costs, and maximum-level rejection", Purchases);
             Check(report, "contact rewards once and movement-origin bonus", ContactRewards);
             Check(report, "movement, radius, and dash values", MovementValues);
@@ -62,6 +65,7 @@ namespace LightsOut.Editor
         static LightsOutVerticalModel Fixture(int[] levels = null, double money = 0, float surge = 0)
         {
             LightsOutVerticalModel model = new LightsOutVerticalModel();
+            model.PrepareIncome();
             Snapshot saved = Read(model); saved.random = 97193711; saved.money = money; saved.earned = money;
             saved.skills = levels ?? new int[LightsOutVerticalModel.Skills.Length]; saved.surge = surge;
             Require(model.ImportJson(JsonUtility.ToJson(saved)), "Deterministic fixture was rejected");
@@ -78,7 +82,7 @@ namespace LightsOut.Editor
         {
             var skills = LightsOutVerticalModel.Skills;
             int[] expected = { 10, 5, 5, 5, 1, 5, 5, 5, 5, 1, 5, 5, 5, 5, 1, 10, 10, 5, 5, 1 };
-            Require(skills.Length == 25, "The skill tree must contain 20 retained nodes and five appended nodes");
+            Require(skills.Length == 26, "The skill tree must retain all 25 nodes and append instant contact at stable ID 25");
             int[] branches = new int[4];
             for (int i = 0; i < 20; i++)
             {
@@ -97,13 +101,14 @@ namespace LightsOut.Editor
                 "The late active rise is not an upgrade of vertical penetration Lv.3");
             Require(skills[22].MaxLevel == 6 && skills[23].MaxLevel == 3 && skills[24].PrerequisiteId == 11 && skills[24].PrerequisiteLevel == 2,
                 "Work speed, upper link or completion chain contracts differ");
-            return "Original 4 branches x 5 nodes retained; five additions append stable IDs 20 through 24";
+            Require(skills[25].MaxLevel == 5 && skills[25].PrerequisiteId == 22 && skills[25].PrerequisiteLevel == 2, "Instant contact chance must be a separate five-level skill after work speed Lv.2");
+            return "Original nodes 0 through 24 retained; separate instant-contact chance appends stable ID 25";
         }
 
         static string Purchases()
         {
             LightsOutVerticalModel model = Fixture(null, 1e12);
-            Require(!model.BuySkill(-1) && !model.BuySkill(25), "An invalid skill purchase was accepted");
+            Require(!model.BuySkill(-1) && !model.BuySkill(26), "An invalid skill purchase was accepted");
             Require(!model.CanBuySkill(1) && !model.BuySkill(1), "A missing predecessor did not lock its successor");
             int purchases = 0;
             for (int i = 0; i < LightsOutVerticalModel.Skills.Length; i++)
@@ -121,7 +126,7 @@ namespace LightsOut.Editor
                 Require(!model.CanBuySkill(i) && !model.BuySkill(i) && double.IsPositiveInfinity(model.GetSkillCost(i)), "A maximum skill could be purchased again");
                 Near(atCap, model.Money, "Rejected purchase deducted money");
             }
-            return purchases + " legal level purchases, predecessor locks, exact costs, and 25 cap rejections";
+            return purchases + " legal level purchases, predecessor locks, exact costs, and 26 cap rejections";
         }
 
         static string ContactRewards()

@@ -31,8 +31,10 @@ namespace LightsOut
         [Min(0)] public int FloorsPerDayAfterLast = 2;
         [Min(0)] public float SecondsPerDayAfterLast = 1;
         [Min(1)] public float MaximumDuration = 150;
-        public float[] ExtinguishSeconds = { 1, .8f, .65f, .5f, .35f, .2f, 0 };
-        public int[] SkillMinimumDays = { 1, 5, 5, 10, 30, 10, 12, 15, 20, 30, 5, 10, 15, 20, 30, 15, 20, 25, 30, 40, 10, 20, 1, 1, 10 };
+        public float[] ExtinguishSeconds = { 1, .8f, .6f, .45f, .3f, .2f, .15f };
+        [Range(.1f, .2f)] public float MinExtinguishSeconds = .15f;
+        public float[] InstantExtinguishChances = { 0, .05f, .1f, .15f, .2f, .25f };
+        public int[] SkillMinimumDays = { 1, 5, 5, 10, 30, 10, 12, 15, 20, 30, 5, 10, 15, 20, 30, 15, 20, 25, 30, 40, 10, 20, 1, 1, 10, 1 };
         [Range(.1f, 10)] public float WorkHoldSeconds = 1.5f;
         [Range(.1f, 60)] public float ComboWindowSeconds = 4;
         public int[] ComboThresholds = { 1, 5, 10, 20 };
@@ -42,6 +44,31 @@ namespace LightsOut
         public int[] AccessoryBaseCosts = { 3, 4, 5, 5, 6 };
         [Min(1)] public float AccessoryCostGrowth = 1.8f;
         [Range(1, 100)] public int MaxAccessoryLevel = 5;
+        [Min(1)] public int ExperienceBase = 50;
+        [Min(0)] public int ExperienceGrowth = 25;
+        [Range(1, 1000)] public int MaximumLevel = 100;
+        public int XPDirectRoom = 1, XPPropagatedRoom = 1, XPSpecialRoom = 3, XPFloorComplete = 2, XPBuildingComplete = 10;
+        public int[] SpecialUnlockLevels = { 3, 5, 8, 12, 16, 20 };
+        public string[] SpecialNames = { "황금 전등", "배전실", "보안실", "연결 전등", "비상 발전기", "고장 난 전등" };
+        public string[] SpecialDescriptions = { "높은 특별 수익", "같은 층의 주변 방 소등", "작업 시간이 길고 보상이 큼", "주변 방을 순차 소등", "남은 근무 시간 추가", "근무 중 한 번 재점등 · 중복 수익 없음" };
+        public float[] SpecialRoomProbabilities = { .02f, .015f, .015f, .012f, .01f, .02f };
+        [Min(0)] public float SpecialChancePerDay = .00025f;
+        [Min(0)] public float GoldenBonusFactor = 4, SecurityBonusFactor = 3, FaultyBonusFactor = 1;
+        [Min(1)] public float SecurityWorkMultiplier = 2;
+        public int ElectricalMinimumRooms = 3, ElectricalMaximumRooms = 6, LinkedMinimumRooms = 2, LinkedMaximumRooms = 3;
+        [Min(.01f)] public float LinkedInterval = .08f;
+        [Min(0)] public float GeneratorTimeBonus = 3, MaximumTimeExtension = 30;
+        [Min(.1f)] public float FaultyRelightSeconds = 5;
+        public float[] BuildingGradeWeights = { .20f, .50f, .25f, .05f };
+        public float[] BuildingGradeMultipliers = { .8f, 1, 1.3f, 1.8f };
+        public string[] BuildingGradeNames = { "절전 건물", "일반 건물", "야근 건물", "초호화 건물" };
+        public float[] NormalBonusWeights = { .65f, .25f, .08f, .02f };
+        public float[] NormalBonusFactors = { 0, .5f, 2, 10 };
+        public int MinimumCashBags = 1, MaximumCashBags = 3, CashBagCountBonus = 0;
+        public float MinimumCashBagFactor = 5, MaximumCashBagFactor = 20;
+        [Range(1, 128)] public int MaxRoomsPerAction = 12;
+        [Range(1, 128)] public int MaxAutomaticRoomsPerAction = 8;
+        [Range(1, 12)] public int MaxPropagationDepth = 4;
 
         static LightsOutBalanceSettings shared;
         public static LightsOutBalanceSettings Shared
@@ -99,9 +126,12 @@ namespace LightsOut
         }
         public float ExtinguishSecondsForLevel(int level)
         {
-            if (ExtinguishSeconds == null || ExtinguishSeconds.Length == 0) return Mathf.Max(0, 1 - Mathf.Clamp(level, 0, 6) / 6f);
-            return Safe(ExtinguishSeconds[Mathf.Clamp(level, 0, ExtinguishSeconds.Length - 1)], 1, 0, 20);
+            float minimum = Safe(MinExtinguishSeconds, .15f, .1f, .2f);
+            if (ExtinguishSeconds == null || ExtinguishSeconds.Length == 0) return Mathf.Max(minimum, 1 - Mathf.Clamp(level, 0, 6) / 6f);
+            return Safe(ExtinguishSeconds[Mathf.Clamp(level, 0, ExtinguishSeconds.Length - 1)], 1, minimum, 20);
         }
+        public float InstantChanceForLevel(int level)
+        { return InstantExtinguishChances == null || InstantExtinguishChances.Length == 0 ? Mathf.Clamp(level * .05f, 0, 1) : Safe(InstantExtinguishChances[Mathf.Clamp(level, 0, InstantExtinguishChances.Length - 1)], 0, 0, 1); }
         public double RentIncomeBasisForDay(int day)
         {
             // Integer floor/column rounding must not make rent fall on a later DAY.

@@ -31,6 +31,8 @@ namespace LightsOut
         public int AttemptsRemaining { get { return AttemptsPerStage - AttemptsUsed; } }
         public int AttemptNumber { get { return Math.Max(1, AttemptsUsed); } }
         public float TimeRemaining { get; private set; }
+        public float TimeExtended { get; private set; }
+        public float TotalAttemptDuration { get { return AttemptDuration + TimeExtended; } }
         public float AttemptDuration { get { return currentPlan.duration; } }
         public double RentDue { get { return currentPlan.rentDue; } }
         public double LastShiftIncome { get; private set; }
@@ -52,6 +54,8 @@ namespace LightsOut
             Permanent = permanent ?? new LightsOutPermanentModel();
             Work = new LightsOutVerticalModel(2, true, 2.4f, 20);
             Work.Changed += OnWorkChanged;
+            Work.ExperienceEarned += OnExperienceEarned;
+            Work.TimeBonusRequested += OnTimeBonus;
             Reset();
         }
         public void BindPermanent(LightsOutPermanentModel permanent)
@@ -104,7 +108,7 @@ namespace LightsOut
         }
         void BeginShiftState(RentPhase phase)
         {
-            Phase = phase; TimeRemaining = AttemptDuration;
+            Phase = phase; TimeRemaining = AttemptDuration; TimeExtended = 0;
             LastShiftIncome = 0; LastCompleted = false;
             LastRouletteSlot = -1; LastRouletteMultiplier = 1;
             RouletteUsed = false; SettlementResolved = false;
@@ -114,6 +118,7 @@ namespace LightsOut
             if (Phase != RentPhase.Lobby || AttemptsUsed != 0) return false;
             suppressChanges = true;
             Work.SetAccessories(Permanent.CaptureEffects());
+            Work.PrepareShift(Stage, Permanent.Level);
             AttemptsUsed = 1; BeginShiftState(RentPhase.Working); Work.StartAccessoryEffects();
             suppressChanges = false; Notify(); return true;
         }
@@ -134,6 +139,7 @@ namespace LightsOut
             suppressChanges = true;
             LastCompleted = Work.IsComplete;
             if (!LastCompleted) TimeRemaining = 0;
+            if (LastCompleted) Work.AwardBuildingExperience();
             Work.FinalizeDepartureBonus();
             LastShiftIncome = Work.PendingIncome;
             Work.CloseBuilding(); Phase = RentPhase.Checkout;
@@ -182,7 +188,7 @@ namespace LightsOut
             if (!CanStartNextAttempt) return false;
             suppressChanges = true;
             if (!Work.BeginBuilding(currentPlan.floors, currentPlan.roomWidth, currentPlan.columns)) { suppressChanges = false; return false; }
-            Work.SetAccessories(Permanent.CaptureEffects()); AttemptsUsed++;
+            Work.SetAccessories(Permanent.CaptureEffects()); Work.PrepareShift(Stage, Permanent.Level); AttemptsUsed++;
             BeginShiftState(RentPhase.Working); Work.StartAccessoryEffects();
             suppressChanges = false; Notify(); return true;
         }
@@ -204,6 +210,14 @@ namespace LightsOut
         public bool BuySkill(int id) { return CanBuySkill(id) && Work.BuySkill(id); }
 
         void OnWorkChanged() { if (!suppressChanges) Notify(); }
+        void OnExperienceEarned(int amount) { if (Phase == RentPhase.Working) Permanent.AddExperience(amount); }
+        void OnTimeBonus(float amount)
+        {
+            if (Phase != RentPhase.Working || amount <= 0 || float.IsNaN(amount) || float.IsInfinity(amount)) return;
+            float limit = LightsOutIncomeRules.Safe(LightsOutBalanceSettings.Shared.MaximumTimeExtension, 30, 0, 900);
+            float granted = Math.Min(amount, Math.Max(0, limit - TimeExtended));
+            TimeExtended += granted; TimeRemaining += granted;
+        }
         void Notify() { if (Changed != null) Changed(); }
         uint NextRandom()
         { randomState ^= randomState << 13; randomState ^= randomState >> 17; randomState ^= randomState << 5; return randomState; }
@@ -211,38 +225,41 @@ namespace LightsOut
         [Serializable] sealed class SaveState
         {
             public int version, stage, phase, attempts, slot, multiplier;
-            public float remaining; public double lastIncome;
+            public float remaining, timeExtended; public double lastIncome;
             public bool lastCompleted, rouletteUsed, settled;
             public uint random; public string work; public StagePlan plan;
         }
         public string ExportJson()
         {
             return JsonUtility.ToJson(new SaveState { version = 2, stage = Stage, phase = (int)Phase, attempts = AttemptsUsed,
-                remaining = TimeRemaining, lastIncome = LastShiftIncome, lastCompleted = LastCompleted,
+                remaining = TimeRemaining, timeExtended = TimeExtended, lastIncome = LastShiftIncome, lastCompleted = LastCompleted,
                 rouletteUsed = RouletteUsed, settled = SettlementResolved, slot = LastRouletteSlot,
                 multiplier = LastRouletteMultiplier, random = randomState, work = Work.ExportJson(), plan = currentPlan });
         }
         public bool ImportJson(string json)
         {
-            if (string.IsNullOrEmpty(json) || json.Length > 2100000) return false;
+            if (string.IsNullOrEmpty(json) || json.Length > 13000000) return false;
             SaveState saved;
             try { saved = JsonUtility.FromJson<SaveState>(json); } catch (Exception) { return false; }
             if (saved == null || (saved.version != 1 && saved.version != 2) || saved.stage < 1 || saved.stage > MaximumStage ||
                 saved.phase < 0 || saved.phase > (saved.version == 1 ? 3 : 4) || saved.attempts < 0 || saved.attempts > AttemptsPerStage ||
-                !Finite(saved.remaining) || saved.remaining < 0 || !Finite(saved.lastIncome) || saved.lastIncome < 0 ||
+                !Finite(saved.remaining) || saved.remaining < 0 || !Finite(saved.timeExtended) || saved.timeExtended < 0 || saved.timeExtended > 900 || !Finite(saved.lastIncome) || saved.lastIncome < 0 ||
                 saved.random == 0 || string.IsNullOrEmpty(saved.work)) return false;
             LightsOutVerticalModel candidate = new LightsOutVerticalModel();
             if (!candidate.ImportJson(saved.work) || !candidate.RewardsDeferred) return false;
             StagePlan plan = saved.version == 1 ? LegacyPlanForDay(saved.stage, candidate.BaseRoomWidth) : saved.plan;
             if (!ValidPlan(plan) || candidate.FloorCount != plan.floors || candidate.FloorRooms != plan.columns ||
-                Math.Abs(candidate.BaseRoomWidth - plan.roomWidth) > .000001 || saved.remaining > plan.duration) return false;
-            double maximumIncome = BaseIncome(plan.columns, plan.floors) * 2 * LightsOutBalanceSettings.Shared.MaximumComboMultiplier + candidate.PeakCombo * candidate.BadgeBonusPerCombo;
+                Math.Abs(candidate.BaseRoomWidth - plan.roomWidth) > .000001 || saved.remaining > plan.duration + saved.timeExtended) return false;
+            double maximumIncome = BaseIncome(plan.columns, plan.floors) * 500 + candidate.PeakCombo * candidate.BadgeBonusPerCombo;
             if (saved.lastIncome > maximumIncome + .000001) return false;
             RentPhase phase = (RentPhase)saved.phase;
+            if (phase == RentPhase.Checkout && Math.Abs(saved.lastIncome - candidate.PendingIncome) > .000001) return false;
+            if (phase != RentPhase.Working && phase != RentPhase.Lobby) candidate.InitializeLegacyReceipt(saved.lastIncome);
+            if (phase != RentPhase.Working && phase != RentPhase.Lobby && Math.Abs(saved.lastIncome - candidate.TotalWorkIncome) > Math.Max(.000001, saved.lastIncome * 1e-9)) return false;
             int startedAttempts = saved.attempts + (saved.version == 1 && phase == RentPhase.Working ? 1 : 0);
             if (phase == RentPhase.Lobby)
             {
-                if (startedAttempts != 0 || Math.Abs(saved.remaining - plan.duration) > .000001 || saved.lastIncome != 0 || saved.lastCompleted ||
+                if (startedAttempts != 0 || saved.timeExtended != 0 || Math.Abs(saved.remaining - plan.duration) > .000001 || saved.lastIncome != 0 || saved.lastCompleted ||
                     saved.rouletteUsed || saved.settled || saved.slot != -1 || saved.multiplier != 1 || candidate.BuildingClosed || candidate.PendingSettled ||
                     candidate.PendingIncome != 0 || candidate.ClearedFloors != 0 || candidate.Combo != 0 || candidate.PeakCombo != 0) return false;
                 for (int f = 0; f < candidate.FloorCount; f++) if (candidate.GetRemainingRooms(f) != candidate.FloorRooms) return false;
@@ -271,7 +288,8 @@ namespace LightsOut
             }
             suppressChanges = true;
             if (!Work.ImportJson(saved.work)) { suppressChanges = false; return false; }
-            Stage = saved.stage; Phase = phase; AttemptsUsed = startedAttempts; currentPlan = plan; TimeRemaining = saved.remaining;
+            if (phase != RentPhase.Working && phase != RentPhase.Lobby) Work.InitializeLegacyReceipt(saved.lastIncome);
+            Stage = saved.stage; Phase = phase; AttemptsUsed = startedAttempts; currentPlan = plan; TimeRemaining = saved.remaining; TimeExtended = saved.timeExtended;
             LastShiftIncome = saved.lastIncome; LastCompleted = saved.lastCompleted;
             LastRouletteSlot = saved.slot; LastRouletteMultiplier = saved.multiplier;
             RouletteUsed = saved.rouletteUsed; SettlementResolved = saved.settled; randomState = saved.random;

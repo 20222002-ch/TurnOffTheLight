@@ -11,6 +11,8 @@ namespace LightsOut
         private AudioSource rouletteSource;
         private AudioSource tensionSource;
         private AudioClip tensionPulse;
+        private AudioClip cashDiscovery;
+        private AudioSource cashSource;
         private float masterVolume = 0.7f;
         private float fadeIn;
         private float rouletteTension;
@@ -37,6 +39,7 @@ namespace LightsOut
             }
             if (rouletteSource == null) rouletteSource = CreateSource(48);
             if (tensionSource == null) tensionSource = CreateSource(128);
+            if (cashSource == null) cashSource = CreateSource(48);
             ResetRouletteTension();
             musicSource.Stop();
             musicSource.clip = music;
@@ -84,6 +87,7 @@ namespace LightsOut
             if (effectSource != null) effectSource.volume = masterVolume;
             if (rouletteSource != null) rouletteSource.volume = masterVolume;
             if (tensionSource != null) tensionSource.volume = masterVolume;
+            if (cashSource != null) cashSource.volume = masterVolume;
             RefreshMusicVolume();
         }
 
@@ -110,6 +114,25 @@ namespace LightsOut
             source.spatialBlend = 0f;
             source.priority = priority;
             return source;
+        }
+
+        public void PlayCashDiscovery()
+        {
+            if (cashSource == null) return;
+            if (cashDiscovery == null)
+            {
+                const int rate=24000;const float duration=.24f;
+                float[] data=new float[(int)(rate*duration)];
+                for(int i=0;i<data.Length;i++)
+                {
+                    float t=i/(float)rate, note=t<.10f?t:t-.10f;
+                    float frequency=t<.10f?660:990;
+                    float envelope=Mathf.Min(1,note/.006f)*Mathf.Exp(-note*22);
+                    data[i]=.22f*envelope*(Mathf.Sin(t*frequency*2*Mathf.PI)+.25f*Mathf.Sin(t*frequency*4*Mathf.PI));
+                }
+                cashDiscovery=AudioClip.Create("Lights Out - Hidden Cash Discovery",data.Length,1,rate,false);cashDiscovery.SetData(data,0);
+            }
+            cashSource.volume=masterVolume;cashSource.PlayOneShot(cashDiscovery);
         }
 
         private void RefreshMusicVolume()
@@ -149,11 +172,13 @@ namespace LightsOut
         {
             ResetRouletteTension();
             if (rouletteSource != null) rouletteSource.Stop();
+            if (cashSource != null) cashSource.Stop();
         }
 
         private void OnDestroy()
         {
             if (tensionPulse != null) Destroy(tensionPulse);
+            if (cashDiscovery != null) Destroy(cashDiscovery);
         }
     }
 }

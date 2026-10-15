@@ -46,12 +46,20 @@ MonoBehaviour:
   ExtinguishSeconds:
   - 1
   - 0.8
-  - 0.65
-  - 0.5
-  - 0.35
+  - 0.6
+  - 0.45
+  - 0.3
   - 0.2
+  - 0.15
+  MinExtinguishSeconds: 0.15
+  InstantExtinguishChances:
   - 0
-  SkillMinimumDays: 0100000005000000050000000a0000001e0000000a0000000c0000000f000000140000001e000000050000000a0000000f000000140000001e0000000f00000014000000190000001e000000280000000a0000001400000001000000010000000a000000
+  - 0.05
+  - 0.1
+  - 0.15
+  - 0.2
+  - 0.25
+  SkillMinimumDays: 0100000005000000050000000a0000001e0000000a0000000c0000000f000000140000001e000000050000000a0000000f000000140000001e0000000f00000014000000190000001e000000280000000a0000001400000001000000010000000a00000001000000
   WorkHoldSeconds: 1.5
   ComboWindowSeconds: 4
   ComboThresholds: 01000000050000000a00000014000000
@@ -67,3 +75,80 @@ MonoBehaviour:
   AccessoryBaseCosts: 0300000004000000050000000500000006000000
   AccessoryCostGrowth: 1.8
   MaxAccessoryLevel: 5
+  ExperienceBase: 50
+  ExperienceGrowth: 25
+  MaximumLevel: 100
+  XPDirectRoom: 1
+  XPPropagatedRoom: 1
+  XPSpecialRoom: 3
+  XPFloorComplete: 2
+  XPBuildingComplete: 10
+  SpecialUnlockLevels: 0300000005000000080000000c0000001000000014000000
+  SpecialNames:
+  - "\uD669\uAE08 \uC804\uB4F1"
+  - "\uBC30\uC804\uC2E4"
+  - "\uBCF4\uC548\uC2E4"
+  - "\uC5F0\uACB0 \uC804\uB4F1"
+  - "\uBE44\uC0C1 \uBC1C\uC804\uAE30"
+  - "\uACE0\uC7A5 \uB09C \uC804\uB4F1"
+  SpecialDescriptions:
+  - "\uB192\uC740 \uD2B9\uBCC4 \uC218\uC775"
+  - "\uAC19\uC740 \uCE35\uC758 \uC8FC\uBCC0 \uBC29 \uC18C\uB4F1"
+  - "\uC791\uC5C5 \uC2DC\uAC04\uC774 \uAE38\uACE0 \uBCF4\uC0C1\uC774 \uD07C"
+  - "\uC8FC\uBCC0 \uBC29\uC744 \uC21C\uCC28 \uC18C\uB4F1"
+  - "\uB0A8\uC740 \uADFC\uBB34 \uC2DC\uAC04 \uCD94\uAC00"
+  - "\uADFC\uBB34 \uC911 \uD55C \uBC88 \uC7AC\uC810\uB4F1 \xB7 \uC911\uBCF5 \uC218\uC775
+    \uC5C6\uC74C"
+  SpecialRoomProbabilities:
+  - 0.02
+  - 0.015
+  - 0.015
+  - 0.012
+  - 0.01
+  - 0.02
+  SpecialChancePerDay: 0.00025
+  GoldenBonusFactor: 4
+  SecurityBonusFactor: 3
+  FaultyBonusFactor: 1
+  SecurityWorkMultiplier: 2
+  ElectricalMinimumRooms: 3
+  ElectricalMaximumRooms: 6
+  LinkedMinimumRooms: 2
+  LinkedMaximumRooms: 3
+  LinkedInterval: 0.08
+  GeneratorTimeBonus: 3
+  MaximumTimeExtension: 30
+  FaultyRelightSeconds: 5
+  BuildingGradeWeights:
+  - 0.2
+  - 0.5
+  - 0.25
+  - 0.05
+  BuildingGradeMultipliers:
+  - 0.8
+  - 1
+  - 1.3
+  - 1.8
+  BuildingGradeNames:
+  - "\uC808\uC804 \uAC74\uBB3C"
+  - "\uC77C\uBC18 \uAC74\uBB3C"
+  - "\uC57C\uADFC \uAC74\uBB3C"
+  - "\uCD08\uD638\uD654 \uAC74\uBB3C"
+  NormalBonusWeights:
+  - 0.65
+  - 0.25
+  - 0.08
+  - 0.02
+  NormalBonusFactors:
+  - 0
+  - 0.5
+  - 2
+  - 10
+  MinimumCashBags: 1
+  MaximumCashBags: 3
+  CashBagCountBonus: 0
+  MinimumCashBagFactor: 5
+  MaximumCashBagFactor: 20
+  MaxRoomsPerAction: 12
+  MaxAutomaticRoomsPerAction: 8
+  MaxPropagationDepth: 4

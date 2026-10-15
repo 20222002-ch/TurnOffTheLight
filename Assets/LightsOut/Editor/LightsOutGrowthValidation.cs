@@ -9,7 +9,7 @@ namespace LightsOut.Editor
     {
         [Serializable] sealed class Report { public int passed, failed; public List<Result> checks = new List<Result>(); }
         [Serializable] sealed class Result { public string name; public bool passed; public string details; }
-        [Serializable] sealed class PendingSave { public int id, kind, waves; public double delay; public long action, sequence; public bool automated; }
+        [Serializable] sealed class PendingSave { public int id, kind, waves, depth, affected, limit; public double delay; public long action, sequence; public bool automated; }
         [Serializable] sealed class WorkSave
         {
             public int version, run; public double money, earned, clock, automaticAccumulator, lastFloorCompletion;
@@ -18,11 +18,12 @@ namespace LightsOut.Editor
             public int floors, rooms, combo, peakCombo, keyOpeningRooms, ringRange;
             public float roomWidth, comboRemaining, holdBonusSeconds, comboMovePerCount, ringChance, badgeBonusPerCombo;
             public bool deferred, closed, pendingSettled, openingKeysApplied, departureBonusApplied; public double pendingIncome;
+            public LightsOutIncomeState income;
         }
         [Serializable] sealed class CampaignSave
         {
             public int version, stage, phase, attempts, slot, multiplier;
-            public float remaining; public double lastIncome; public bool lastCompleted, rouletteUsed, settled;
+            public float remaining, timeExtended; public double lastIncome; public bool lastCompleted, rouletteUsed, settled;
             public uint random; public string work; public LightsOutRentModel.StagePlan plan;
         }
         [Serializable] sealed class PermanentSave { public int version, points, highest; public int[] levels, equipped; }
@@ -30,6 +31,8 @@ namespace LightsOut.Editor
         [UnityEditor.MenuItem("Lights Out/Run combo, equipment and weighted roulette checks")]
         static void RunFromMenu() { Debug.Log(Run()); }
         public static string Run()
+        { return LightsOutIncomeValidation.WithPureRules(RunPure); }
+        static string RunPure()
         {
             var report = new Report();
             Check(report, "combo reward thresholds are exact and never retroactive", ComboThresholds);
@@ -57,6 +60,7 @@ namespace LightsOut.Editor
         static LightsOutVerticalModel Work(int floors = 8, int rooms = 20, int[] levels = null, bool deferred = false, double money = 0)
         {
             var model = new LightsOutVerticalModel(floors, deferred, 2.4f, rooms);
+            model.PrepareIncome();
             WorkSave saved = JsonUtility.FromJson<WorkSave>(model.ExportJson());
             saved.random = 97193711; saved.skills = levels ?? Skills(); saved.money = saved.earned = money;
             Require(model.ImportJson(JsonUtility.ToJson(saved)), "Growth fixture was rejected"); return model;
@@ -239,6 +243,7 @@ namespace LightsOut.Editor
             saved.plan = new LightsOutRentModel.StagePlan { columns = profile.Columns, floors = profile.Floors, roomWidth = profile.RoomWidth,
                 duration = profile.Duration, rentDue = LightsOutRentModel.RentForStage(day) };
             var work = new LightsOutVerticalModel(profile.Floors, true, profile.RoomWidth, profile.Columns);
+            work.PrepareShift(day, 1);
             WorkSave rich = JsonUtility.FromJson<WorkSave>(work.ExportJson()); rich.skills = levels; rich.money = rich.earned = 1000000;
             saved.work = JsonUtility.ToJson(rich); Require(model.ImportJson(JsonUtility.ToJson(saved)), "DAY gate fixture rejected"); return model;
         }
@@ -258,6 +263,7 @@ namespace LightsOut.Editor
             var first = ReadyDay(1, Skills());
             for (int id = 0; id < LightsOutVerticalModel.Skills.Length; id++)
                 Require(first.CanBuySkill(id) == (id == 0 || id == 22 || id == 23), "DAY 1 gate differs at skill " + id);
+            Require(first.BuySkill(22) && first.BuySkill(22) && first.CanBuySkill(25), "DAY 1 instant chance did not unlock after work speed Lv.2");
             var prereqs = Skills(); prereqs[0] = 3; prereqs[10] = prereqs[11] = 2;
             var day5 = ReadyDay(5, prereqs);var day10 = ReadyDay(10, prereqs);
             Require(day5.CanBuySkill(1) && day5.CanBuySkill(10) && !day5.CanBuySkill(5) && !day5.CanBuySkill(20), "DAY 5 gate did not separate new and later branches");

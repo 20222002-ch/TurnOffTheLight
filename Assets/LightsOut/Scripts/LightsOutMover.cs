@@ -22,8 +22,9 @@ namespace LightsOut
         public Vector2 Position => transform.position;
         public int WorkingRoomId => HasActiveWorkRoom() ? activeWorkRoom : -1;
         public float WorkElapsed => WorkingRoomId >= 0 && workStates.TryGetValue(activeWorkRoom, out WorkState state) ? state.Elapsed : 0;
-        public float WorkProgress => Model != null && Model.ExtinguishSeconds > 0 ? Mathf.Clamp01(WorkElapsed / Model.ExtinguishSeconds) : 0;
-        public bool IsWorking => WorkingRoomId >= 0 && WorkElapsed > 0 && Model.ExtinguishSeconds > 0;
+        public float WorkDuration => WorkingRoomId >= 0 ? Model.GetRoomWorkDuration(activeWorkRoom / Model.FloorRooms, activeWorkRoom % Model.FloorRooms) : 0;
+        public float WorkProgress => WorkDuration > 0 ? Mathf.Clamp01(WorkElapsed / WorkDuration) : 0;
+        public bool IsWorking => WorkingRoomId >= 0 && WorkElapsed > 0 && WorkDuration > 0;
         public int RetainedWorkCount => workStates.Count;
         InputAction movement, dash, rise;
         bool dashRequested, riseRequested, inputEnabled;
@@ -33,19 +34,21 @@ namespace LightsOut
         const int MaxWorkStates = 256;
         int activeWorkRoom = -1, workRun, workFloors, workColumns;
         float workRoomWidth;
-        sealed class WorkState { public float Elapsed, RetentionRemaining; }
+        sealed class WorkState { public float Elapsed, Duration, RetentionRemaining; }
         struct WorkInterval { public int Id; public float Enter, Exit; }
         readonly Dictionary<int, WorkState> workStates = new Dictionary<int, WorkState>();
         readonly List<WorkInterval> workIntervals = new List<WorkInterval>(16);
+        readonly List<WorkInterval> bodyIntervals = new List<WorkInterval>(16);
+        readonly Dictionary<int, float> workVisitExits = new Dictionary<int, float>();
         readonly List<int> removedWork = new List<int>(16);
         static readonly Comparison<WorkInterval> IntervalOrder = (a, b) => a.Enter.CompareTo(b.Enter);
         [Serializable] sealed class WorkSave
         {
-            public int version = 1, run, floors, columns;
+            public int version = 2, run, floors, columns;
             public float roomWidth, duration;
             public SavedRoomWork[] roomstates;
         }
-        [Serializable] sealed class SavedRoomWork { public int id; public float elapsed, retentionremaining; }
+        [Serializable] sealed class SavedRoomWork { public int id; public float elapsed, duration, retentionremaining; }
         public void Initialize(LightsOutVerticalModel model)
         {
             movement?.Dispose(); dash?.Dispose(); rise?.Dispose();
@@ -63,7 +66,6 @@ namespace LightsOut
             pointer = transform.Find("Direction");
             SetInputEnabled(true);
             CancelWork(); RememberWorkGeometry();
-            if (Model.ExtinguishSeconds <= 0) Sweep(Model, Position, Position, Model.ExtinguishRadius);
         }
         public void SetInputEnabled(bool active)
         {
@@ -142,12 +144,7 @@ namespace LightsOut
             after.x = Mathf.Clamp(after.x, left + .22f, -left - .22f);
             after.y = Mathf.Clamp(after.y, .22f, Model.FloorCount * FloorHeight - .22f);
             transform.position = new Vector3(after.x, after.y, -1);
-            if (Model.ExtinguishSeconds <= 0)
-            {
-                CancelWork();
-                Sweep(Model, geometryChanged ? after : before, after, Model.ExtinguishRadius);
-            }
-            else if (geometryChanged) activeWorkRoom = -1;
+            if (geometryChanged) activeWorkRoom = -1;
             else
             {
                 AdvanceWork(before, after, movementSeconds);
@@ -165,7 +162,7 @@ namespace LightsOut
         }
         public void CancelWork()
         {
-            activeWorkRoom = -1; workStates.Clear(); workIntervals.Clear(); removedWork.Clear();
+            activeWorkRoom = -1; workStates.Clear(); workIntervals.Clear(); bodyIntervals.Clear(); workVisitExits.Clear(); removedWork.Clear();
         }
         void RememberWorkGeometry()
         {
@@ -178,13 +175,14 @@ namespace LightsOut
         }
         bool HasActiveWorkRoom()
         {
-            return Model != null && !WorkGeometryChanged() && !Model.IsComplete && !Model.BuildingClosed && Model.ExtinguishSeconds > 0 && activeWorkRoom >= 0
+            return Model != null && !WorkGeometryChanged() && !Model.IsComplete && !Model.BuildingClosed && activeWorkRoom >= 0
                 && activeWorkRoom < Model.FloorCount * Model.FloorRooms && Model.IsLightOn(activeWorkRoom / Model.FloorRooms, activeWorkRoom % Model.FloorRooms)
-                && RoomBounds(Model, activeWorkRoom / Model.FloorRooms, activeWorkRoom % Model.FloorRooms).Contains(Position);
+                && WorkBounds(Model, activeWorkRoom / Model.FloorRooms, activeWorkRoom % Model.FloorRooms).Contains(Position);
         }
         void AdvanceWork(Vector2 start, Vector2 end, float dt)
         {
-            workIntervals.Clear(); activeWorkRoom = -1;
+            workIntervals.Clear(); bodyIntervals.Clear(); workVisitExits.Clear();
+            int priorActive = activeWorkRoom; activeWorkRoom = -1;
             {
                 int firstFloor = Mathf.Clamp(Mathf.FloorToInt(Mathf.Min(start.y, end.y) / FloorHeight), 0, Model.FloorCount - 1);
                 int lastFloor = Mathf.Clamp(Mathf.FloorToInt(Mathf.Max(start.y, end.y) / FloorHeight), 0, Model.FloorCount - 1);
@@ -195,10 +193,19 @@ namespace LightsOut
                     {
                         if (!Model.IsLightOn(floor, column)) continue;
                         if (SegmentInterval(start, end, RoomBounds(Model, floor, column), out float enter, out float exit) && exit - enter > .000001f)
-                            workIntervals.Add(new WorkInterval { Id = floor * Model.FloorRooms + column, Enter = enter, Exit = exit });
+                            bodyIntervals.Add(new WorkInterval { Id = floor * Model.FloorRooms + column, Enter = enter, Exit = exit });
                     }
-                workIntervals.Sort(IntervalOrder);
+                bodyIntervals.Sort(IntervalOrder);
             }
+            // Physical room interiors always take priority. In gaps or extinguished rooms, expanded
+            // range selects one nearest lit room rather than advancing every overlapping rectangle.
+            float cursor = 0;
+            for (int i = 0; i < bodyIntervals.Count; i++)
+            {
+                AddRangeInterval(start, end, cursor, bodyIntervals[i].Enter, priorActive);
+                AddWorkInterval(bodyIntervals[i]); cursor = Mathf.Max(cursor, bodyIntervals[i].Exit);
+            }
+            AddRangeInterval(start, end, cursor, 1, priorActive);
             // Every retained room has its own countdown. Time spent inside is excluded from that countdown.
             removedWork.Clear();
             foreach (KeyValuePair<int, WorkState> item in workStates)
@@ -215,27 +222,72 @@ namespace LightsOut
             {
                 WorkInterval interval = workIntervals[i];
                 if (!Model.IsLightOn(interval.Id / Model.FloorRooms, interval.Id % Model.FloorRooms)) continue;
+                if (Model.TryInstantContact(interval.Id / Model.FloorRooms, interval.Id % Model.FloorRooms))
+                {
+                    workStates.Remove(interval.Id);
+                    if (Model.IsComplete || Model.BuildingClosed) { CancelWork(); return; }
+                    continue;
+                }
+                float duration = Model.GetRoomWorkDuration(interval.Id / Model.FloorRooms, interval.Id % Model.FloorRooms);
                 if (workStates.TryGetValue(interval.Id, out WorkState state))
                 {
-                    state.RetentionRemaining -= interval.Enter * dt;
+                    float previousExit = workVisitExits.TryGetValue(interval.Id, out float visitedExit) ? visitedExit : 0;
+                    state.RetentionRemaining -= Mathf.Max(0, interval.Enter - previousExit) * dt;
                     if (state.RetentionRemaining <= 0) { workStates.Remove(interval.Id); state = null; }
                 }
                 if (state == null)
                 {
                     MakeRoomForWork();
-                    state = new WorkState(); workStates[interval.Id] = state;
+                    state = new WorkState { Duration = duration }; workStates[interval.Id] = state;
                 }
-                state.Elapsed = Mathf.Min(Model.ExtinguishSeconds, state.Elapsed + (interval.Exit - interval.Enter) * dt);
-                state.RetentionRemaining = Mathf.Max(0, Model.HoldSeconds - (1 - interval.Exit) * dt);
-                if (state.Elapsed + .00001f >= Model.ExtinguishSeconds)
+                if (Mathf.Abs(state.Duration - duration) > .00001f)
+                { state.Elapsed = Mathf.Clamp01(state.Elapsed / Mathf.Max(.00001f, state.Duration)) * duration; state.Duration = duration; }
+                state.Elapsed = Mathf.Min(duration, state.Elapsed + (interval.Exit - interval.Enter) * dt);
+                state.RetentionRemaining = Model.HoldSeconds; workVisitExits[interval.Id] = interval.Exit;
+                if (state.Elapsed + .00001f >= duration)
                 {
                     workStates.Remove(interval.Id);
                     Model.Contact(interval.Id / Model.FloorRooms, interval.Id % Model.FloorRooms);
                     if (Model.IsComplete || Model.BuildingClosed) { CancelWork(); return; }
                 }
-                else if (state.RetentionRemaining <= 0) workStates.Remove(interval.Id);
-                else if (interval.Exit >= 1 - .000001f && RoomBounds(Model, interval.Id / Model.FloorRooms, interval.Id % Model.FloorRooms).Contains(end)) activeWorkRoom = interval.Id;
+                else if (interval.Exit >= 1 - .000001f && WorkBounds(Model, interval.Id / Model.FloorRooms, interval.Id % Model.FloorRooms).Contains(end)) activeWorkRoom = interval.Id;
             }
+            foreach (KeyValuePair<int, float> visit in workVisitExits)
+                if (workStates.TryGetValue(visit.Key, out WorkState state))
+                { state.RetentionRemaining = Mathf.Max(0, state.RetentionRemaining - (1 - visit.Value) * dt); if (state.RetentionRemaining <= 0) workStates.Remove(visit.Key); }
+        }
+        void AddWorkInterval(WorkInterval interval)
+        {
+            if (interval.Exit - interval.Enter <= .000001f) return;
+            if (workIntervals.Count > 0)
+            {
+                int last = workIntervals.Count - 1; WorkInterval previous = workIntervals[last];
+                if (previous.Id == interval.Id && interval.Enter <= previous.Exit + .000001f)
+                { previous.Exit = Mathf.Max(previous.Exit, interval.Exit); workIntervals[last] = previous; return; }
+            }
+            workIntervals.Add(interval);
+        }
+        void AddRangeInterval(Vector2 start, Vector2 end, float from, float to, int priorActive)
+        {
+            float radius = Mathf.Max(0, Model.ExtinguishRadius - .12f);
+            if (radius <= 0 || to - from <= .000001f) return;
+            Vector2 midpoint = Vector2.Lerp(start, end, (from + to) * .5f);
+            int selected = -1; float nearest = radius * radius + .000001f;
+            int firstFloor = Mathf.Clamp(Mathf.FloorToInt((midpoint.y - radius) / FloorHeight), 0, Model.FloorCount - 1);
+            int lastFloor = Mathf.Clamp(Mathf.FloorToInt((midpoint.y + radius) / FloorHeight), 0, Model.FloorCount - 1);
+            int firstColumn = Mathf.Clamp(Mathf.FloorToInt((midpoint.x - radius + Model.HalfWidth) / Model.RoomWidth), 0, Model.FloorRooms - 1);
+            int lastColumn = Mathf.Clamp(Mathf.FloorToInt((midpoint.x + radius + Model.HalfWidth) / Model.RoomWidth), 0, Model.FloorRooms - 1);
+            for (int floor = firstFloor; floor <= lastFloor; floor++)
+                for (int column = firstColumn; column <= lastColumn; column++)
+                {
+                    if (!Model.IsLightOn(floor, column)) continue;
+                    Rect room = RoomBounds(Model, floor, column); Vector2 closest = new Vector2(Mathf.Clamp(midpoint.x, room.xMin, room.xMax), Mathf.Clamp(midpoint.y, room.yMin, room.yMax));
+                    float distance = (midpoint - closest).sqrMagnitude; int id = floor * Model.FloorRooms + column;
+                    if (distance < nearest - .000001f || Mathf.Abs(distance - nearest) <= .000001f && id == priorActive)
+                    { nearest = distance; selected = id; }
+                }
+            if (selected >= 0 && SegmentInterval(start, end, WorkBounds(Model, selected / Model.FloorRooms, selected % Model.FloorRooms), out float enter, out float exit))
+                AddWorkInterval(new WorkInterval { Id = selected, Enter = Mathf.Max(from, enter), Exit = Mathf.Min(to, exit) });
         }
         void MakeRoomForWork()
         {
@@ -247,12 +299,12 @@ namespace LightsOut
         }
         public string ExportWorkJson()
         {
-            if (Model == null || Model.BuildingClosed || Model.IsComplete || Model.ExtinguishSeconds <= 0 || WorkGeometryChanged()) return "";
+            if (Model == null || Model.BuildingClosed || Model.IsComplete || WorkGeometryChanged()) return "";
             var entries = new List<SavedRoomWork>(workStates.Count);
             foreach (KeyValuePair<int, WorkState> item in workStates)
             {
                 if (item.Value.RetentionRemaining <= 0 || !Model.IsLightOn(item.Key / Model.FloorRooms, item.Key % Model.FloorRooms)) continue;
-                entries.Add(new SavedRoomWork { id = item.Key, elapsed = item.Value.Elapsed, retentionremaining = item.Value.RetentionRemaining });
+                entries.Add(new SavedRoomWork { id = item.Key, elapsed = item.Value.Elapsed, duration = item.Value.Duration, retentionremaining = item.Value.RetentionRemaining });
             }
             entries.Sort((a, b) => a.id.CompareTo(b.id));
             return JsonUtility.ToJson(new WorkSave { run = Model.RunNumber, floors = Model.FloorCount, columns = Model.FloorRooms,
@@ -260,27 +312,29 @@ namespace LightsOut
         }
         public bool ImportWorkJson(string json)
         {
-            if (Model == null || Model.BuildingClosed || Model.IsComplete || Model.ExtinguishSeconds <= 0 || string.IsNullOrEmpty(json)) return false;
+            if (Model == null || Model.BuildingClosed || Model.IsComplete || string.IsNullOrEmpty(json)) return false;
             WorkSave saved;
             try { saved = JsonUtility.FromJson<WorkSave>(json); } catch (ArgumentException) { return false; }
-            if (saved == null || saved.version != 1 || saved.run != Model.RunNumber || saved.floors != Model.FloorCount || saved.columns != Model.FloorRooms
+            if (saved == null || (saved.version != 1 && saved.version != 2) || saved.run != Model.RunNumber || saved.floors != Model.FloorCount || saved.columns != Model.FloorRooms
                 || !Finite(saved.roomWidth) || Mathf.Abs(saved.roomWidth - Model.RoomWidth) > .0001f || !Finite(saved.duration)
-                || Mathf.Abs(saved.duration - Model.ExtinguishSeconds) > .0001f || saved.roomstates == null || saved.roomstates.Length > MaxWorkStates) return false;
+                || saved.duration <= 0 || saved.duration > 120 || saved.roomstates == null || saved.roomstates.Length > MaxWorkStates) return false;
             var restored = new Dictionary<int, WorkState>();
             for (int i = 0; i < saved.roomstates.Length; i++)
             {
                 SavedRoomWork entry = saved.roomstates[i];
+                float oldDuration = entry == null ? 0 : saved.version == 1 ? saved.duration : entry.duration;
                 if (entry == null || entry.id < 0 || entry.id >= Model.FloorCount * Model.FloorRooms || restored.ContainsKey(entry.id)
-                    || !Finite(entry.elapsed) || entry.elapsed <= 0 || entry.elapsed >= Model.ExtinguishSeconds || !Finite(entry.retentionremaining)
+                    || !Finite(oldDuration) || oldDuration <= 0 || oldDuration > 120 || !Finite(entry.elapsed) || entry.elapsed <= 0 || entry.elapsed >= oldDuration || !Finite(entry.retentionremaining)
                     || entry.retentionremaining <= 0 || entry.retentionremaining > Model.HoldSeconds + .0001f
                     || !Model.IsLightOn(entry.id / Model.FloorRooms, entry.id % Model.FloorRooms)) return false;
-                restored[entry.id] = new WorkState { Elapsed = entry.elapsed, RetentionRemaining = entry.retentionremaining };
+                float currentDuration = Model.GetRoomWorkDuration(entry.id / Model.FloorRooms, entry.id % Model.FloorRooms);
+                restored[entry.id] = new WorkState { Elapsed = entry.elapsed / oldDuration * currentDuration, Duration = currentDuration, RetentionRemaining = entry.retentionremaining };
             }
             CancelWork(); RememberWorkGeometry();
             foreach (KeyValuePair<int, WorkState> item in restored)
             {
                 workStates[item.Key] = item.Value;
-                if (RoomBounds(Model, item.Key / Model.FloorRooms, item.Key % Model.FloorRooms).Contains(Position)) activeWorkRoom = item.Key;
+                if (WorkBounds(Model, item.Key / Model.FloorRooms, item.Key % Model.FloorRooms).Contains(Position)) activeWorkRoom = item.Key;
             }
             return true;
         }
@@ -288,6 +342,11 @@ namespace LightsOut
         public static Rect RoomBounds(LightsOutVerticalModel model, int floor, int column)
         {
             return new Rect(-model.HalfWidth + column * model.RoomWidth + .10f, floor * FloorHeight + .10f, model.RoomWidth - .20f, FloorHeight - .20f);
+        }
+        public static Rect WorkBounds(LightsOutVerticalModel model, int floor, int column)
+        {
+            Rect bounds = RoomBounds(model, floor, column); float radius = Mathf.Max(0, model.ExtinguishRadius - .12f);
+            return Rect.MinMaxRect(bounds.xMin - radius, bounds.yMin - radius, bounds.xMax + radius, bounds.yMax + radius);
         }
         public static float ResidenceFraction(Vector2 start, Vector2 end, Rect rect)
         { return SegmentInterval(start, end, rect, out float enter, out float exit) ? Mathf.Max(0, exit - enter) : 0; }

@@ -54,7 +54,7 @@ namespace LightsOut
         bool lastRising;
         float saveTimer, refreshTimer, toastTimer, lastSound;
         int quickPage;
-        bool treeShowing, lobbyShowing;
+        bool treeShowing, lobbyShowing, accessoriesShowing;
         RentPhase lastPhase;
         string saveNotice;
 
@@ -131,7 +131,7 @@ namespace LightsOut
             progressFill=canvasRoot.Find("ProgressFill").GetComponent<RectTransform>();
             floating=canvasRoot.Find("FloatingRewards").GetComponent<RectTransform>(); modal=canvasRoot.Find("Modal").GetComponent<RectTransform>();
             modal.gameObject.SetActive(false);
-            T("Subtitle").text="WASD / 방향키로 이동   ·   닿으면 소등   ·   T 스킬 트리";
+            T("Subtitle").text="WASD / 방향키로 이동   ·   방에 머물러 소등   ·   T 스킬 트리";
             T("UpgradeTitle").text="더 높이, 더 빠르게";
             T("MoneyCaption").text="보유금 · 정산된 수입";
             for(int i=0;i<4;i++)
@@ -162,6 +162,7 @@ namespace LightsOut
         void Update()
         {
             if(Model==null) return;
+            ResizeWorldRender();
             float dt=Mathf.Min(Time.unscaledDeltaTime,.1f);
             if(!IsPaused&&Career.Phase==RentPhase.Working)
             {
@@ -216,7 +217,7 @@ namespace LightsOut
             dashButton.interactable=Model.DashUnlocked&&!IsPaused&&player.DashCooldown<=0;
             SetText(dashButton.GetComponentInChildren<TMP_Text>(),!Model.DashUnlocked?"대시를 해금하면 Space로 돌파":player.DashCooldown>0?"대시 준비 "+player.DashCooldown.ToString("0.0")+"초":"대시  SPACE →");
             SetText(pageHint,quickPage==0?"이동하면서 성장하세요":"위층으로 퍼지는 소등과 자동화");
-            SetText(hint,"5번 안에 월세를 갚으세요 · 전부 소등하거나 시간이 끝나면 기회 1회 차감 · 퇴근 후 수입 정산");
+            SetText(hint,"5번 안에 월세를 갚으세요 · 근무 시작 시 기회 1회 사용 · 퇴근 후 수입 정산");
             for(int slot=0;slot<4;slot++)
             {
                 int id=QuickId(slot),level=Model.SkillLevels[id];var s=LightsOutVerticalModel.Skills[id];
@@ -281,6 +282,18 @@ namespace LightsOut
             for(int i=0;i<16;i++)WorldRect(ground,"Road Marking",new Vector3(-30+i*4,-3,-.1f),new Vector2(1.2f,.04f),LightsOutStyle.Hex("596050"));
             RenderRooms(1);
         }
+        void ResizeWorldRender()
+        {
+            if(!render||!viewport||!worldCamera)return;
+            Vector2 size=viewport.rectTransform.rect.size;
+            if(size.x<1||size.y<1)return;
+            float aspect=Mathf.Clamp(size.x/size.y,.75f,3);
+            int width=1600,height=Mathf.RoundToInt(width/aspect);
+            if(height>1600){height=1600;width=Mathf.RoundToInt(height*aspect);}
+            if(Mathf.Abs(render.width-width)<4&&Mathf.Abs(render.height-height)<4)return;
+            var replacement=new RenderTexture(width,height,24,RenderTextureFormat.ARGB32){name="LightsOut Full Game View",antiAliasing=4};replacement.Create();
+            worldCamera.targetTexture=replacement;viewport.texture=replacement;render.Release();Destroy(render);render=replacement;
+        }
         SpriteRenderer WorldRect(Transform parent,string name,Vector3 at,Vector2 size,Color color)
         {
             var go=new GameObject(name,typeof(SpriteRenderer));go.transform.SetParent(parent,false);go.transform.localPosition=at;go.transform.localScale=new Vector3(size.x,size.y,1);
@@ -307,10 +320,11 @@ namespace LightsOut
                 {
                     var rv=v.rooms[c];bool visible=c<Model.FloorRooms&&c>=firstColumn&&c<=lastColumn;
                     if(rv.root.gameObject.activeSelf!=visible)rv.root.gameObject.SetActive(visible);if(!visible)continue;
-                    bool on=Model.IsLightOn(floor,c);Color target=on?Amber:LightsOutStyle.Hex("1C3145");
+                    bool on=Model.IsLightOn(floor,c);RoomSpecialKind kind=Model.GetRoomKind(floor,c);
+                    Color lightColor=RoomLightColor(kind);Color target=on?Color.Lerp(Amber,lightColor,kind==RoomSpecialKind.Normal?0:.27f):LightsOutStyle.Hex("1C3145");
                     rv.root.localPosition=new Vector3(-Model.HalfWidth+(c+.5f)*Model.RoomWidth,0,0);rv.root.localScale=new Vector3(Model.RoomWidth/LightsOutMover.RoomWidth,1,1);
                     rv.displayed=reused?target:Color.Lerp(rv.displayed,target,1-Mathf.Exp(-dt*16));rv.body.color=rv.displayed;
-                    rv.lamp.color=on?Cream:LightsOutStyle.Hex("405D72");rv.glow.color=on?new Color(1,.85f,.45f,.12f):Color.clear;
+                    rv.lamp.color=on?lightColor:LightsOutStyle.Hex("405D72");rv.glow.color=on?new Color(lightColor.r,lightColor.g,lightColor.b,.12f):Color.clear;
                 }
             }
             roof.position=new Vector3(0,Model.FloorCount*LightsOutMover.FloorHeight+.10f,-.2f);
@@ -326,8 +340,23 @@ namespace LightsOut
                 playerLocator.rectTransform.anchoredPosition=new Vector2(vr.anchoredPosition.x+vp.x*vr.rect.width-43,vr.anchoredPosition.y-(1-vp.y)*vr.rect.height+52);
             }
         }
+        static Color RoomLightColor(RoomSpecialKind kind)
+        {
+            switch(kind)
+            {
+                case RoomSpecialKind.Golden:return LightsOutStyle.Hex("FFD45C");
+                case RoomSpecialKind.Electrical:return LightsOutStyle.Hex("FFC07A");
+                case RoomSpecialKind.Security:return LightsOutStyle.Hex("73CCE8");
+                case RoomSpecialKind.Linked:return LightsOutStyle.Hex("88E2AD");
+                case RoomSpecialKind.Generator:return LightsOutStyle.Hex("EAB5FF");
+                case RoomSpecialKind.Faulty:return LightsOutStyle.Hex("ED8591");
+                default:return Cream;
+            }
+        }
         void OnExtinguished(VerticalExtinguishEvent e)
         {
+            if(e.CashFound)sound.PlayCashDiscovery();
+            else if(e.HighBonus)sound.Play(2,1.12f);
             if(Time.unscaledTime-lastSound>.06f){sound.Play(e.FloorCompleted?4:1,Mathf.Min(1.3f,.9f+Model.Combo*.012f));lastSound=Time.unscaledTime;}
             feedback?.OnExtinguished(e);
             if(!floating.gameObject.activeSelf||e.AffectedIds.Length==0)return;
@@ -345,7 +374,7 @@ namespace LightsOut
         {
             if(rentPanel.IsRouletteOpen)return;
             if(Career.Phase==RentPhase.Checkout||Career.Phase==RentPhase.Bankrupt){Notify("먼저 퇴근 수입을 정산하세요.");return;}
-            rentPanel.Hide();lobby.Hide();lobbyShowing=false;modal.gameObject.SetActive(false);SetPaused(true);treeShowing=true;tree.Show();Refresh();
+            rentPanel.Hide();lobby.Hide();lobbyShowing=false;accessoriesShowing=false;modal.gameObject.SetActive(false);SetPaused(true);treeShowing=true;tree.Show();Refresh();
         }
         public void CloseSkillTree()
         {
@@ -359,13 +388,43 @@ namespace LightsOut
         void HandlePause()
         {
             if(rentPanel.IsRouletteOpen){rentPanel.TryCloseRoulette();return;}
+            if(accessoriesShowing){CloseAccessoryView();return;}
             if(treeShowing){CloseSkillTree();return;}
             if(Career.Phase==RentPhase.Lobby){ShowLobby();return;}
             if(Career.Phase!=RentPhase.Working){ShowCheckout();return;}
             if(IsPaused)CloseSkillTree();else ShowSettings();
         }
         void ShowCheckout()
-        {player.CancelWork();workGauge?.Hide();if(riseEffect)riseEffect.enabled=false;tree.Hide();treeShowing=false;lobby.Hide();lobbyShowing=false;modal.gameObject.SetActive(false);SetPaused(true);rentPanel.Show();Refresh();}
+        {player.CancelWork();workGauge?.Hide();if(riseEffect)riseEffect.enabled=false;tree.Hide();treeShowing=false;lobby.Hide();lobbyShowing=false;accessoriesShowing=false;modal.gameObject.SetActive(false);SetPaused(true);rentPanel.Show();Refresh();}
+        public void SettleAndOpenSkills()
+        {
+            if(rentPanel.IsRouletteOpen)return;
+            if(Career.Phase==RentPhase.Checkout&&!KeepShiftIncome())return;
+            if(Career.Phase==RentPhase.Bankrupt){ShowCheckout();return;}
+            OpenSkillTree();
+        }
+        public bool SettleAndPayRent()
+        {
+            if(rentPanel.IsRouletteOpen)return false;
+            if(Career.Phase==RentPhase.Checkout)
+            {
+                if(Model.Money+Career.LastShiftIncome<Career.RentDue||!KeepShiftIncome())return false;
+            }
+            return PayRent();
+        }
+        public bool SettleAndStartNextShift()
+        {
+            if(rentPanel.IsRouletteOpen)return false;
+            if(Career.Phase==RentPhase.Checkout&&!KeepShiftIncome())return false;
+            if(Career.Phase==RentPhase.Bankrupt){ShowCheckout();return false;}
+            return StartNextShift();
+        }
+        public void OpenAccessoriesFromCheckout()
+        {
+            if(rentPanel.IsRouletteOpen||Career.Phase==RentPhase.Working||Career.Phase==RentPhase.Lobby)return;
+            tree.Hide();treeShowing=false;rentPanel.Hide();lobbyShowing=false;accessoriesShowing=true;SetPaused(true);lobby.Show(true);
+        }
+        public void CloseAccessoryView(){if(accessoriesShowing)ShowCheckout();}
         public bool KeepShiftIncome()
         {
             if(rentPanel.IsRouletteOpen||!Career.SkipRoulette())return false;
@@ -388,7 +447,7 @@ namespace LightsOut
         {if(rentPanel.IsRouletteOpen)return;Career.Reset();player.CancelWork();lastPhase=Career.Phase;Save();ShowLobby();}
         void BeginWorkUi()
         {
-            lastPhase=Career.Phase;tree.Hide();treeShowing=false;rentPanel.Hide();lobby.Hide();lobbyShowing=false;modal.gameObject.SetActive(false);
+            lastPhase=Career.Phase;tree.Hide();treeShowing=false;rentPanel.Hide();lobby.Hide();lobbyShowing=false;accessoriesShowing=false;modal.gameObject.SetActive(false);
             player.ResetMotion(StartingPosition());if(riseEffect)riseEffect.enabled=true;CameraRig.Snap(player.Position,Model);SetPaused(false);saveTimer=0;Save();Refresh();
         }
         public bool CanConfigureAccessories => lobbyShowing&&Career.Phase==RentPhase.Lobby&&!rentPanel.IsRouletteOpen;
@@ -399,7 +458,7 @@ namespace LightsOut
         public bool StartLobbyShift()
         {if(!CanConfigureAccessories||!Career.StartReadyWork())return false;BeginWorkUi();return true;}
         void ShowLobby()
-        {player.CancelWork();workGauge?.Hide();if(riseEffect)riseEffect.enabled=false;tree.Hide();treeShowing=false;rentPanel.Hide();modal.gameObject.SetActive(false);lobbyShowing=true;SetPaused(true);lobby.Show();Refresh();}
+        {player.CancelWork();workGauge?.Hide();if(riseEffect)riseEffect.enabled=false;tree.Hide();treeShowing=false;rentPanel.Hide();modal.gameObject.SetActive(false);lobbyShowing=true;accessoriesShowing=false;SetPaused(true);lobby.Show();Refresh();}
         void ShowCareerIntro()
         {
             Modal("오늘도 밀린 월세 때문에 야근입니다.","건물의 불을 끄고 성과급을 모아 월세를 갚으세요.");
@@ -421,8 +480,8 @@ namespace LightsOut
         void ShowHelp()
         {
             if(rentPanel.IsRouletteOpen)return;
-            Modal("관리인 업무 안내","방을 지나가는 것만으로 불이 꺼집니다.");
-            UIText(modal,"Instructions","WASD / 방향키: 자유 이동 · Space: 해금 후 대시\nR: 수직 소등 계열을 강화한 뒤 수직 돌파 액티브\nT: 스킬 트리 · ESC: 일시 정지 (시간도 정지)\n\n넓고 낮은 마트에서 좁고 높은 빌딩으로 성장합니다.\n건물 가로 축소는 실제 이동 거리와 방 폭을 줄입니다.\n전체 소등 또는 시간 종료마다 근무 기회 1회 차감.\n이번 수입은 퇴근 정산하며 기존 보유금은 보호됩니다.\n\n월세 차감 후 잔액과 강화를 다음 단계로 이월합니다.\n5회 안에 갚지 못하면 보유금과 강화가 초기화됩니다.",380,265,840,280,21,Cream);
+            Modal("관리인 업무 안내","켜진 방에 머물러 작업 게이지를 채우세요.");
+            UIText(modal,"Instructions","WASD / 방향키: 자유 이동 · Space: 해금 후 대시\nR: 후반 수직 돌파 · T: 스킬 트리 · ESC: 일시 정지\n\n기본 소등 1초, 강화 후에도 최소 0.15초가 필요합니다.\n즉시 소등은 방마다 첫 진입에 한 번 추첨합니다.\n방을 떠난 진행도는 기본 1.5초 동안 보존됩니다.\n근무 시작 시 기회 1회 사용 · DAY마다 총 5회.\n수입은 퇴근 정산하며 기존 보유금은 룰렛에서 보호됩니다.\n\n월세 차감 후 잔액과 일반 스킬을 다음 DAY로 이월합니다.\n5회 안에 못 갚으면 현금과 일반 스킬이 초기화됩니다.\n영구 레벨, 특수 방 해금, 액세서리는 유지됩니다.",380,265,840,300,20,Cream);
             ModalButton("근무 시작 →",580,CloseSkillTree,Amber);
         }
         void ConfirmReset()

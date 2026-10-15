@@ -17,6 +17,7 @@ namespace LightsOut.Editor
         {
             public int version = 1, stage = 2, phase = 1, attempts = 4, slot = -1, multiplier = 1;
             public float remaining = 12;
+            public float timeExtended;
             public double lastIncome = 105;
             public bool lastCompleted = true, rouletteUsed, settled;
             public uint random = 97193711;
@@ -28,15 +29,17 @@ namespace LightsOut.Editor
         static void RunFromMenu() { Debug.Log(Run()); }
 
         public static string Run()
+        { return LightsOutIncomeValidation.WithPureRules(RunPure); }
+        static string RunPure()
         {
             var report = new Report();
             Check(report, "DAY progression changes a wide mall into a narrow tower", DayGeometry);
             Check(report, "width shrink preserves logical rooms and base reward budget", WidthIdentity);
             Check(report, "held work takes a full second and cancels after closure", HeldCompletion);
             Check(report, "room work resumes within its hold window and expires afterward", RetainedWork);
-            Check(report, "speed upgrades reach instant swept contact and rise stays bounded", InstantRise);
+            Check(report, "speed upgrades retain a positive minimum and rise stays bounded", InstantRise);
             Check(report, "upper links stop after their configured reach and combo pays only unique rooms", NonrecursiveLinks);
-            Check(report, "20, 22 and 24-node saves migrate without losing progress", LegacyWork);
+            Check(report, "20, 22, 24 and 25-node saves migrate without losing progress", LegacyWork);
             Check(report, "legacy rent checkout retains bank, rent and payout until the next DAY", LegacyRent);
             Check(report, "permanent equipment uses points, three slots and equipped-only effects", EquipmentContract);
             Check(report, "first clear rewards persist across campaign reset without farming", PermanentRewards);
@@ -69,6 +72,7 @@ namespace LightsOut.Editor
         static LightsOutVerticalModel Work(int floors = 20, int rooms = 4, float width = 2.4f, int[] skills = null, double money = 0)
         {
             var model = new LightsOutVerticalModel(floors, false, width, rooms);
+            model.PrepareIncome();
             string save = Number(Number(Number(model.ExportJson(), "money", money), "earned", money), "random", 97193711);
             if (skills != null) save = Levels(save, skills);
             Require(model.ImportJson(save), "Isolated work fixture was rejected");
@@ -184,7 +188,7 @@ namespace LightsOut.Editor
 
         static string InstantRise()
         {
-            float[] seconds = { 1, .8f, .65f, .5f, .35f, .2f, 0 };
+            float[] seconds = { 1, .8f, .6f, .45f, .3f, .2f, .15f };
             for (int level = 0; level < seconds.Length; level++)
             { var speed = Work(); speed.SkillLevels[22] = level; Near(seconds[level], speed.ExtinguishSeconds, "Incorrect work-time upgrade at level " + level); }
             var held = Work(100, 4, 1.8f, RiseSkills(3, false));
@@ -199,14 +203,14 @@ namespace LightsOut.Editor
             return WithMover(instant, mover =>
             {
                 mover.StepInput(Vector2.zero, .28f, false, true);
-                Require(instant.TotalOff >= 17, "Instant work failed to sweep every crossed floor during rise");
+                Require(instant.TotalOff < 17, "Minimum-duration work became unconditional swept instant contact during rise");
                 float landed = mover.Position.y; float cooldown = mover.RiseCooldown;
                 mover.StepInput(Vector2.zero, .01f, false, true);
                 Near(landed, mover.Position.y, "Cooldown allowed a second upward burst"); Require(mover.RiseCooldown > 0, "Rise did not retain a cooldown");
                 mover.SetInputEnabled(false); mover.StepInput(Vector2.up, 5, false, true); Near(landed, mover.Position.y, "Disabled input allowed movement");
                 Near(cooldown - .01f, mover.RiseCooldown, "Paused rise cooldown changed");
                 mover.ResetMotion(Centre(instant, 0, 0)); Require(mover.RiseRemaining == 0 && mover.RiseCooldown == 0, "New work retained rise motion or cooldown");
-                return "Seven speed levels end at instant swept contact; sixteen-floor rise is bounded, gated by cooldown and frozen on pause";
+                return "Seven speed levels retain a positive 0.15-second minimum; sixteen-floor rise stays bounded, one-shot and frozen on pause";
             });
         }
 
@@ -235,19 +239,19 @@ namespace LightsOut.Editor
 
         static string LegacyWork()
         {
-            foreach (int oldCount in new[] { 20, 22, 24 })
+            foreach (int oldCount in new[] { 20, 22, 24, 25 })
             {
                 var original = Work(8, 4, 3.2f); original.Contact(0, 1);
                 int[] oldSkills = new int[oldCount]; oldSkills[0] = 2;
                 string old = Levels(Number(original.ExportJson(), "version", oldCount == 20 ? 2 : oldCount == 22 ? 3 : 4), oldSkills);
                 var loaded = new LightsOutVerticalModel(); Require(loaded.ImportJson(old), oldCount + "-node save was rejected");
-                Require(loaded.SkillLevels.Length == 25 && loaded.SkillLevels[0] == 2 && loaded.SkillLevels[24] == 0, "Migration lost prior skill levels or granted a new skill");
+                Require(loaded.SkillLevels.Length == 26 && loaded.SkillLevels[0] == 2 && loaded.SkillLevels[25] == 0, "Migration lost prior skill levels or granted the new instant chance");
                 Require(!loaded.IsLightOn(0, 1) && loaded.TotalOff == original.TotalOff && loaded.FloorRooms == 4, "Migration lost lights or logical geometry");
                 Near(original.Money, loaded.Money, "Migration changed saved income");
                 Near(oldCount == 20 ? 2.4f : 3.2f, loaded.BaseRoomWidth, "Legacy width migration differs");
                 var reloaded = new LightsOutVerticalModel(); Require(reloaded.ImportJson(loaded.ExportJson()), "Upgraded save could not round-trip");
             }
-            return "20-, 22- and 24-node saves extend to 25 nodes with saved lights, wallet, old levels and widths preserved";
+            return "20-, 22-, 24- and 25-node saves extend to 26 nodes with saved lights, wallet, old levels and widths preserved";
         }
 
         static string LegacyRent()

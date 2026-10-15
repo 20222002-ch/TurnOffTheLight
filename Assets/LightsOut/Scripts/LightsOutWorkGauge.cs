@@ -89,7 +89,7 @@ namespace LightsOut
 
         public void Tick(float dt = 0)
         {
-            if (!ring || !mover || !worldCamera || !mover.IsWorking || mover.Model == null || mover.Model.ExtinguishSeconds <= 0)
+            if (!ring || !mover || !worldCamera || !mover.IsWorking || mover.Model == null || mover.WorkDuration <= 0)
             { Hide(); return; }
             float progress = mover.WorkProgress;
             if (progress <= 0) { Hide(); return; }

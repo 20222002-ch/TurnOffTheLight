@@ -18,7 +18,7 @@ namespace LightsOut.Editor
         [Serializable] sealed class Snapshot
         {
             public int version, stage, phase, attempts, slot, multiplier;
-            public float remaining;
+            public float remaining, timeExtended;
             public double lastIncome;
             public bool lastCompleted, rouletteUsed, settled;
             public uint random;
@@ -30,6 +30,8 @@ namespace LightsOut.Editor
         static void RunFromMenu() { Debug.Log(Run()); }
 
         public static string Run()
+        { return LightsOutIncomeValidation.WithPureRules(RunPure); }
+        static string RunPure()
         {
             Report report = new Report();
             Check(report, "held-work opening mall and five-opportunity rent budget", OpeningDifficulty);
@@ -335,6 +337,7 @@ namespace LightsOut.Editor
                 a.LastCompleted == b.LastCompleted && a.LastRouletteSlot == b.LastRouletteSlot && a.LastRouletteMultiplier == b.LastRouletteMultiplier &&
                 a.RouletteUsed == b.RouletteUsed && a.SettlementResolved == b.SettlementResolved, "Campaign counters/outcome differ after load");
             Near(a.TimeRemaining, b.TimeRemaining, "Remaining timer differs"); Near(a.LastShiftIncome, b.LastShiftIncome, "Shift income differs");
+            Near(a.TimeExtended, b.TimeExtended, "Extended work timer differs");
             Near(a.AttemptDuration, b.AttemptDuration, "Saved DAY duration differs"); Near(a.RentDue, b.RentDue, "Saved DAY rent differs");
             Near(a.Work.Money, b.Work.Money, "Bank differs"); Near(a.Work.TotalEarned, b.Work.TotalEarned, "Cumulative earnings differ");
             Near(a.Work.BaseRoomWidth, b.Work.BaseRoomWidth, "Base building width differs");
