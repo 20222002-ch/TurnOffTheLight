@@ -4,6 +4,8 @@ Unity 2D 게임 **불 끄고 퇴근해! — Lights Out!**의 프로젝트입니�
 
 현재는 26개 일반 스킬, 실제 근무 결과 정산, 선택 퇴근 룰렛, 무작위 수익·돈다발, 6종 특수 방과 영구 관리인 레벨·액세서리를 구현하는 MVP입니다. 일반 스킬·보유금은 게임오버 시 초기화되며 영구 XP·특수 방 해금·액세서리는 남습니다.
 
+조기 월세 납부는 이전 완납 기록과 무관하게 매 납부마다 남은 기회에 따른 포인트를 지급하며, 최고 DAY 갱신에만 별도 1포인트를 더합니다. Editor·Development Build에는 확인 후 영구 진행까지 지우는 `[DEV] 로컬 저장 초기화`가 있습니다.
+
 - Unity **6000.3.8f1**, URP 2D, uGUI, Input System
 - 실행 씬: `Assets/LightsOut/Scenes/LightsOut.unity`
 - [실행·조작·시스템 안내](Documentation/README.md)

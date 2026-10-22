@@ -26,6 +26,17 @@ namespace LightsOut
         public LightsOutPermanentModel Permanent => Career.Permanent;
         public bool IsPaused { get; private set; }
         public bool Testing { get; set; }
+        public static bool DevelopmentToolsEnabled
+        {
+            get
+            {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                return true;
+#else
+                return false;
+#endif
+            }
+        }
         public int VisibleFloorCount { get; private set; }
         public LightsOutCameraRig CameraRig { get; private set; }
         const string SaveKey = "LightsOut.Rent.v3";
@@ -40,6 +51,7 @@ namespace LightsOut
         TMP_Text money, zone, shift, progress, combo, total, hint, reward, automation, toast, pageHint, playerLocator;
         RectTransform progressFill, floating, modal;
         UnityEngine.UI.Button dashButton;
+        UnityEngine.UI.Button developmentResetButton;
         LightsOutSkillTree tree;
         LightsOutRentPanel rentPanel;
         LightsOutAudio sound;
@@ -94,6 +106,7 @@ namespace LightsOut
             lobby=gameObject.AddComponent<LightsOutLobbyPanel>();lobby.Initialize(this);
             BindUI();
             ConfigureImmersiveView();
+            BuildDevelopmentResetButton();
             riseEffect=gameObject.AddComponent<LightsOutRiseEffect>();riseEffect.Initialize(player,primitive);
             workGauge=gameObject.AddComponent<LightsOutWorkGauge>();workGauge.Initialize(player,worldCamera,primitive);
             feedback=gameObject.AddComponent<LightsOutFeedback>();feedback.Initialize(this,primitive,worldCamera);
@@ -189,6 +202,26 @@ namespace LightsOut
             bool warning=Career.Phase==RentPhase.Working&&!IsPaused&&Career.TimeRemaining<=5;
             finalCountdown.gameObject.SetActive(warning);
             if(warning){SetText(finalCountdown,Mathf.CeilToInt(Career.TimeRemaining).ToString());finalCountdown.alpha=.72f+.28f*Mathf.Sin(Time.unscaledTime*8);}
+            RefreshDevelopmentResetButton();
+        }
+        void BuildDevelopmentResetButton()
+        {
+            if(!DevelopmentToolsEnabled)return;
+            var face=UIShape(canvasRoot,"DevelopmentResetButton",30,24,225,34,LightsOutStyle.Hex("663844"),5,true);
+            developmentResetButton=face.gameObject.AddComponent<UnityEngine.UI.Button>();developmentResetButton.targetGraphic=face;
+            developmentResetButton.onClick.AddListener(ConfirmDevelopmentReset);
+            var label=UIText(face.transform,"Label","[DEV] 로컬 저장 초기화",4,2,217,30,16,Cream);label.alignment=TextAlignmentOptions.Center;
+            RefreshDevelopmentResetButton();
+        }
+        void RefreshDevelopmentResetButton()
+        {
+            if(!developmentResetButton||Career==null)return;
+            bool visible=DevelopmentToolsEnabled&&Career.Phase!=RentPhase.Working&&!treeShowing&&!accessoriesShowing&&!modal.gameObject.activeSelf&&!rentPanel.IsRouletteOpen;
+            developmentResetButton.gameObject.SetActive(visible);
+            if(!visible)return;
+            var rect=(RectTransform)developmentResetButton.transform;
+            rect.anchoredPosition=Career.Phase==RentPhase.Lobby?new Vector2(1130,-164):new Vector2(30,-24);
+            if(rect.GetSiblingIndex()!=canvasRoot.childCount-1)rect.SetAsLastSibling();
         }
         public bool CanBuySkill(int id) => Career!=null&&!(rentPanel&&rentPanel.IsRouletteOpen)&&Career.CanBuySkill(id);
         public string SkillLockReason(int id) => Career.GetSkillLockReason(id);
@@ -476,6 +509,32 @@ namespace LightsOut
             ModalButton(audible?"소리 끄기":"소리 켜기",398,()=>{float v=audible?0:.6f;PlayerPrefs.SetFloat("LightsOut.Volume",v);sound.SetVolume(v);ShowSettings();},LightsOutStyle.Hex("20384E"));
             ModalButton("저장하고 계속하기",462,()=>{Save();CloseSkillTree();Notify("저장했습니다.");},LightsOutStyle.Hex("20384E"));
             ModalButton("처음부터 새 근무",526,ConfirmReset,LightsOutStyle.Hex("603E4A"));
+            if(DevelopmentToolsEnabled)ModalButton("[DEV] 로컬 저장 전체 초기화",590,ConfirmDevelopmentReset,LightsOutStyle.Hex("663844"));
+        }
+        void ConfirmDevelopmentReset()
+        {
+            if(!DevelopmentToolsEnabled||rentPanel.IsRouletteOpen)return;
+            lobby.Hide();lobbyShowing=false;accessoriesShowing=false;
+            Modal("개발용 저장 초기화","모든 진행을 지우고 DAY 1의 처음 상태로 돌아갑니다.");
+            modal.SetAsLastSibling();
+            UIText(modal,"DevelopmentResetDetails","월세 진행 · 보유금 · 일반 스킬\n관리인 포인트 · 영구 경험치와 레벨\n소유 액세서리 · 강화 · 장착 · 최고 DAY 기록\n\n모두 초기화됩니다. 이 작업은 되돌릴 수 없습니다.",380,288,840,180,22,Cream);
+            ModalButton("취소하고 돌아가기",500,()=>{if(Career.Phase==RentPhase.Working)ShowSettings();else CloseSkillTree();},Amber);
+            ModalButton("모든 저장 지우고 처음부터",566,()=>ResetDevelopmentProgress(),LightsOutStyle.Hex("7C4652"));
+        }
+        public bool ResetDevelopmentProgress()
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if(Career==null||rentPanel.IsRouletteOpen)return false;
+            if(!Testing&&!LightsOutDevelopmentSave.ClearProgress(Application.persistentDataPath,SaveKey,"LightsOut.Permanent.v1",out string error))
+            {Notify("저장 초기화 실패: "+error);return false;}
+            Career.BindPermanent(new LightsOutPermanentModel());Career.Reset();
+            player.ResetMotion(StartingPosition());CameraRig.Snap(player.Position,Model);
+            rentPanel.ResetPresentationState();saveTimer=0;toastTimer=0;lastRising=false;quickPage=0;saveNotice=null;
+            lastPhase=Career.Phase;ShowLobby();feedback?.RefreshCombo();Save();
+            Notify("개발용 초기화 완료 · DAY 1부터 시작합니다.");return true;
+#else
+            return false;
+#endif
         }
         void ShowHelp()
         {

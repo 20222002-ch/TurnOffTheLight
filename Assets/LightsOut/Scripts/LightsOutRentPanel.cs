@@ -291,6 +291,13 @@ namespace LightsOut
             targetExperience=owner.Permanent.TotalExperience;displayedExperience=targetExperience;experienceAnimating=false;pendingLevelUp=false;
             if(experienceFraction!=null)RefreshExperience();
         }
+        public void ResetPresentationState()
+        {
+            lastReceiptRun=-1;lastReceiptTarget=-1;unlockAlertTime=0;
+            Array.Clear(unlockGlow,0,unlockGlow.Length);
+            if(unlockAlert!=null)unlockAlert.gameObject.SetActive(false);
+            SkipExperienceAnimation();
+        }
         void RefreshExperience()
         {
             int level=DisplayedLevel;playerLevel.text="Lv. "+level;

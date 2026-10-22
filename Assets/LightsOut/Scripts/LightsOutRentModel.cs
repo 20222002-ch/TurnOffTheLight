@@ -177,6 +177,7 @@ namespace LightsOut
             if (!CanPayRent || Stage >= MaximumStage) return false;
             suppressChanges = true;
             if (!Work.TrySpend(RentDue)) { suppressChanges = false; return false; }
+            // Award only after a real payment succeeds, including early payments on a replayed DAY.
             Permanent.RecordRentPayment(Stage, AttemptsRemaining);
             Stage++; AttemptsUsed = 0; currentPlan = PlanForDay(Stage);
             Work.BeginBuilding(currentPlan.floors, currentPlan.roomWidth, currentPlan.columns);

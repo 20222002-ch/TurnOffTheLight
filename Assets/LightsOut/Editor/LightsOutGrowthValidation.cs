@@ -44,7 +44,7 @@ namespace LightsOut.Editor
             Check(report, "badge pays the peak combo once and freezes at checkout", BadgeDeparture);
             Check(report, "weighted sector widths and center angles match their probabilities", WeightedWheel);
             Check(report, "seeded weighted draws follow the 37/60/3 distribution", WeightedDraws);
-            Check(report, "early rewards cannot be farmed and DAY skill gates apply", RewardsAndDayGates);
+            Check(report, "every early payment earns its bonus, milestone points remain unique and DAY gates apply", RewardsAndDayGates);
             return JsonUtility.ToJson(report, true);
         }
         static void Check(Report report, string name, Func<string> test)
@@ -254,12 +254,20 @@ namespace LightsOut.Editor
             {
                 int day = remaining + 1, bonus = Math.Min(3, remaining);
                 Require(permanent.PreviewEarlyBonus(day, remaining) == bonus && permanent.RecordRentPayment(day, remaining) == 1 + bonus, "Early-payment bonus differs at remaining " + remaining);
-                total += 1 + bonus; Require(permanent.RecordRentPayment(day, remaining) == 0, "A paid DAY awarded farmable points");
+                total += 1 + bonus;
+                Require(permanent.PreviewPaymentPoints(day, remaining) == bonus, "A recorded DAY retained its milestone point or lost its replay early bonus");
             }
             Near(total, permanent.Points, "Permanent point sum differs"); string preserved = permanent.ExportJson();
             var campaign = new LightsOutRentModel(permanent); campaign.Reset();
-            Require(permanent.ExportJson() == preserved && permanent.PreviewPaymentPoints(1, 4) == 0 && permanent.PreviewPaymentPoints(5, 4) == 0,
-                "Campaign reset erased milestones or reopened farming");
+            Require(permanent.ExportJson() == preserved && permanent.PreviewPaymentPoints(1, 4) == 3 && permanent.PreviewPaymentPoints(5, 4) == 3,
+                "Campaign reset erased milestones or disabled replay early bonuses");
+            Require(campaign.StartReadyWork(), "Replay bonus fixture could not start work");
+            CampaignSave replay = JsonUtility.FromJson<CampaignSave>(campaign.ExportJson());
+            replay.work = LightsOutIncomeValidation.Number(LightsOutIncomeValidation.Number(replay.work, "money", 10000), "earned", 10000);
+            Require(campaign.ImportJson(JsonUtility.ToJson(replay)) && campaign.EndAttempt(false) && campaign.SkipRoulette(), "Replay bonus fixture could not settle");
+            Require(campaign.PayRent() && permanent.Points == total + 3 && permanent.HighestPaidDay == 5, "A real replay early payment did not earn exactly three points");
+            string paid = permanent.ExportJson(), paidCampaign = campaign.ExportJson();
+            Require(!campaign.PayRent() && permanent.ExportJson() == paid && campaign.ExportJson() == paidCampaign, "Repeated PayRent awarded points without a second real payment");
             var first = ReadyDay(1, Skills());
             for (int id = 0; id < LightsOutVerticalModel.Skills.Length; id++)
                 Require(first.CanBuySkill(id) == (id == 0 || id == 22 || id == 23), "DAY 1 gate differs at skill " + id);
@@ -268,7 +276,7 @@ namespace LightsOut.Editor
             var day5 = ReadyDay(5, prereqs);var day10 = ReadyDay(10, prereqs);
             Require(day5.CanBuySkill(1) && day5.CanBuySkill(10) && !day5.CanBuySkill(5) && !day5.CanBuySkill(20), "DAY 5 gate did not separate new and later branches");
             Require(day10.CanBuySkill(5) && day10.CanBuySkill(20) && day10.CanBuySkill(24) && !day10.CanBuySkill(21), "DAY 10 gate did not unlock chain/shrink/completion while locking late rise");
-            return "Early bonuses 0/1/2/3/3 pay once and survive reset; DAY 1 permits movement/work-speed/upper-link, later gates unlock at DAY 5 and 10";
+            return "Early bonuses 0/1/2/3/3 apply to every real payment, the highest-DAY point applies once and duplicate PayRent rejects; DAY 1/5/10 skill gates remain intact";
         }
     }
 }

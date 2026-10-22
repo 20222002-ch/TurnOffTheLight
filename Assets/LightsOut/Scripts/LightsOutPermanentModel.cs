@@ -143,23 +143,25 @@ namespace LightsOut
         }
 
         public int PreviewEarlyBonus(int day, int attemptsRemaining)
-        { return IsNewClear(day) ? Math.Max(0, Math.Min(3, attemptsRemaining)) : 0; }
+        { return IsValidDay(day) ? Math.Max(0, Math.Min(3, attemptsRemaining)) : 0; }
 
         public int PreviewPaymentPoints(int day, int attemptsRemaining)
-        { return IsNewClear(day) ? 1 + PreviewEarlyBonus(day, attemptsRemaining) : 0; }
+        { return (IsNewClear(day) ? 1 : 0) + PreviewEarlyBonus(day, attemptsRemaining); }
 
         public int RecordRentPayment(int day, int attemptsRemaining)
         {
             int award = PreviewPaymentPoints(day, attemptsRemaining);
             if (award == 0) return 0;
-            HighestPaidDay = day;
+            // Early-payment rewards belong to this payment; the first-clear point remains a milestone.
+            HighestPaidDay = Math.Max(HighestPaidDay, day);
             int actual = Math.Min(award, MaximumPoints - Points);
             Points += actual;
             Notify(); return actual;
         }
 
         int EquippedLevel(int id) { return IsEquipped(id) ? Levels[id] : 0; }
-        bool IsNewClear(int day) { return day >= 1 && day <= MaximumDay && day > HighestPaidDay; }
+        static bool IsValidDay(int day) { return day >= 1 && day <= MaximumDay; }
+        bool IsNewClear(int day) { return IsValidDay(day) && day > HighestPaidDay; }
         static bool ValidId(int id) { return id >= 0 && id < AccessoryCount; }
         static int DefaultBaseCost(int id) { return id == 0 ? 3 : id == 1 ? 4 : id == 4 ? 6 : 5; }
         void Notify() { if (Changed != null) Changed(); }

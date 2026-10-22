@@ -42,7 +42,7 @@ namespace LightsOut.Editor
             Check(report, "20, 22, 24 and 25-node saves migrate without losing progress", LegacyWork);
             Check(report, "legacy rent checkout retains bank, rent and payout until the next DAY", LegacyRent);
             Check(report, "permanent equipment uses points, three slots and equipped-only effects", EquipmentContract);
-            Check(report, "first clear rewards persist across campaign reset without farming", PermanentRewards);
+            Check(report, "first-clear milestones and repeat early-payment rewards survive campaign reset", PermanentRewards);
             Check(report, "invalid permanent saves reject atomically", InvalidPermanentSaves);
             Check(report, "large floor geometry and modern widths save and reject atomically", GeometrySaveBoundaries);
             return JsonUtility.ToJson(report, true);
@@ -309,14 +309,22 @@ namespace LightsOut.Editor
         {
             var permanent = new LightsOutPermanentModel();
             Require(permanent.PreviewPaymentPoints(1, 4) == 4 && permanent.RecordRentPayment(1, 4) == 4, "First early payment did not award one base point plus capped three-point bonus");
-            Require(permanent.RecordRentPayment(1, 4) == 0 && permanent.RecordRentPayment(0, 5) == 0, "The same or an invalid DAY awarded farmable points");
+            Require(permanent.PreviewPaymentPoints(1, 4) == 3 && permanent.RecordRentPayment(0, 5) == 0, "A recorded DAY lost its early bonus or an invalid DAY awarded points");
             Require(permanent.RecordRentPayment(2, 0) == 1 && permanent.Points == 5 && permanent.HighestPaidDay == 2, "Final-chance clear did not award the first-clear base point");
             Require(permanent.Upgrade(0) && permanent.ToggleEquip(0), "Permanent progress fixture could not buy and equip gloves");
-            string before = permanent.ExportJson(); var campaign = new LightsOutRentModel(permanent); campaign.Reset();
+            var campaign = new LightsOutRentModel(permanent); Require(campaign.StartReadyWork(), "Repeat-payment fixture could not start work");
+            var data = JsonUtility.FromJson<LegacyCampaign>(campaign.ExportJson());
+            data.work = Number(Number(data.work, "money", 10000), "earned", 10000);
+            Require(campaign.ImportJson(JsonUtility.ToJson(data)) && campaign.EndAttempt(false) && campaign.SkipRoulette(), "Repeat-payment fixture could not settle");
+            int beforePayment = permanent.Points;
+            Require(campaign.PayRent() && permanent.Points == beforePayment + 3 && permanent.HighestPaidDay == 2, "An actual replayed DAY payment did not award only its early bonus");
+            string paid = permanent.ExportJson(), paidCampaign = campaign.ExportJson();
+            Require(!campaign.PayRent() && permanent.ExportJson() == paid && campaign.ExportJson() == paidCampaign, "A duplicate payment changed either campaign or permanent progress");
+            string before = permanent.ExportJson(); campaign.Reset();
             Require(permanent.ExportJson() == before, "A campaign restart erased permanent points, equipment or first clears");
             var loaded = new LightsOutPermanentModel(); Require(loaded.ImportJson(before) && loaded.ExportJson() == before, "Permanent progress did not round-trip");
-            Require(loaded.PreviewPaymentPoints(1, 4) == 0 && loaded.PreviewPaymentPoints(3, 1) == 2, "Reload forgot the anti-farming milestone or early payment bonus");
-            return "First paid DAY rewards once; capped early bonuses, equipment and highest clear survive career reset and reload";
+            Require(loaded.PreviewPaymentPoints(1, 4) == 3 && loaded.PreviewPaymentPoints(2, 0) == 0 && loaded.PreviewPaymentPoints(3, 1) == 2, "Reload confused replay early bonuses with first-clear milestone points");
+            return "New highest DAY earns one milestone point; each actual early payment earns its capped bonus, while duplicate payment rejects and reset/reload preserve progress";
         }
 
         static string InvalidPermanentSaves()
